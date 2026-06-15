@@ -1,0 +1,192 @@
+import { z } from "zod";
+import { createRouter, publicQuery, adminQuery } from "./middleware";
+import { getDb } from "./queries/connection";
+import { farmers } from "@db/schema";
+import { eq, like, and, desc, sql, count } from "drizzle-orm";
+
+export const farmersRouter = createRouter({
+  list: publicQuery
+    .input(
+      z
+        .object({
+          search: z.string().optional(),
+          district: z.string().optional(),
+          state: z.string().optional(),
+          language: z.enum(["telugu", "hindi", "english"]).optional(),
+          isActive: z.boolean().optional(),
+          page: z.number().min(1).default(1),
+          limit: z.number().min(1).max(100).default(20),
+        })
+        .optional()
+    )
+    .query(async ({ input }) => {
+      const db = getDb();
+      const {
+        search,
+        district,
+        state,
+        language,
+        isActive,
+        page = 1,
+        limit = 20,
+      } = input ?? {};
+
+      const conditions = [];
+      if (search) {
+        conditions.push(
+          sql`(${farmers.name} LIKE ${`%${search}%`} OR ${farmers.phoneNumber} LIKE ${`%${search}%`})`
+        );
+      }
+      if (district) conditions.push(like(farmers.district, `%${district}%`));
+      if (state) conditions.push(like(farmers.state, `%${state}%`));
+      if (language) conditions.push(eq(farmers.preferredLanguage, language));
+      if (isActive !== undefined) conditions.push(eq(farmers.isActive, isActive));
+
+      const where = conditions.length > 0 ? and(...conditions) : undefined;
+
+      const [items, totalResult] = await Promise.all([
+        db
+          .select()
+          .from(farmers)
+          .where(where)
+          .orderBy(desc(farmers.createdAt))
+          .limit(limit)
+          .offset((page - 1) * limit),
+        db.select({ count: count() }).from(farmers).where(where),
+      ]);
+
+      return {
+        items,
+        total: totalResult[0]?.count ?? 0,
+        page,
+        limit,
+        totalPages: Math.ceil((totalResult[0]?.count ?? 0) / limit),
+      };
+    }),
+
+  getById: publicQuery
+    .input(z.object({ id: z.number() }))
+    .query(async ({ input }) => {
+      const db = getDb();
+      const result = await db
+        .select()
+        .from(farmers)
+        .where(eq(farmers.id, input.id))
+        .limit(1);
+      return result[0] ?? null;
+    }),
+
+  getByPhone: publicQuery
+    .input(z.object({ phoneNumber: z.string() }))
+    .query(async ({ input }) => {
+      const db = getDb();
+      const result = await db
+        .select()
+        .from(farmers)
+        .where(eq(farmers.phoneNumber, input.phoneNumber))
+        .limit(1);
+      return result[0] ?? null;
+    }),
+
+  create: publicQuery
+    .input(
+      z.object({
+        phoneNumber: z.string().min(10).max(20),
+        name: z.string().optional(),
+        preferredLanguage: z.enum(["telugu", "hindi", "english"]).default("english"),
+        location: z.string().optional(),
+        district: z.string().optional(),
+        state: z.string().optional(),
+        latitude: z.number().optional(),
+        longitude: z.number().optional(),
+        landSize: z.number().optional(),
+        primaryCrop: z.string().optional(),
+        secondaryCrops: z.string().optional(),
+      })
+    )
+    .mutation(async ({ input }) => {
+      const db = getDb();
+      const result = await db.insert(farmers).values(input);
+      return { id: Number(result[0].insertId), ...input };
+    }),
+
+  update: publicQuery
+    .input(
+      z.object({
+        id: z.number(),
+        name: z.string().optional(),
+        preferredLanguage: z.enum(["telugu", "hindi", "english"]).optional(),
+        location: z.string().optional(),
+        district: z.string().optional(),
+        state: z.string().optional(),
+        latitude: z.number().optional(),
+        longitude: z.number().optional(),
+        landSize: z.number().optional(),
+        primaryCrop: z.string().optional(),
+        secondaryCrops: z.string().optional(),
+        isActive: z.boolean().optional(),
+      })
+    )
+    .mutation(async ({ input }) => {
+      const db = getDb();
+      const { id, ...data } = input;
+      await db.update(farmers).set(data).where(eq(farmers.id, id));
+      const updated = await db
+        .select()
+        .from(farmers)
+        .where(eq(farmers.id, id))
+        .limit(1);
+      return updated[0];
+    }),
+
+  toggleActive: publicQuery
+    .input(z.object({ id: z.number(), isActive: z.boolean() }))
+    .mutation(async ({ input }) => {
+      const db = getDb();
+      await db
+        .update(farmers)
+        .set({ isActive: input.isActive })
+        .where(eq(farmers.id, input.id));
+      return { success: true };
+    }),
+
+  delete: adminQuery
+    .input(z.object({ id: z.number() }))
+    .mutation(async ({ input }) => {
+      const db = getDb();
+      await db.delete(farmers).where(eq(farmers.id, input.id));
+      return { success: true };
+    }),
+
+  stats: publicQuery.query(async () => {
+    const db = getDb();
+    const [totalResult, activeResult, todayResult, languageResult] =
+      await Promise.all([
+        db.select({ count: count() }).from(farmers),
+        db
+          .select({ count: count() })
+          .from(farmers)
+          .where(eq(farmers.isActive, true)),
+        db
+          .select({ count: count() })
+          .from(farmers)
+          .where(
+            sql`${farmers.createdAt} >= CURDATE()`
+          ),
+        db
+          .select({
+            language: farmers.preferredLanguage,
+            count: count(),
+          })
+          .from(farmers)
+          .groupBy(farmers.preferredLanguage),
+      ]);
+
+    return {
+      total: totalResult[0]?.count ?? 0,
+      active: activeResult[0]?.count ?? 0,
+      today: todayResult[0]?.count ?? 0,
+      byLanguage: languageResult,
+    };
+  }),
+});

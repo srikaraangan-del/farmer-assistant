@@ -21,15 +21,36 @@ import {
 } from "@/components/ui/sidebar";
 import { LOGIN_PATH } from "@/const";
 import { useIsMobile } from "@/hooks/use-mobile";
-import { LayoutDashboard, LogOut, PanelLeft, Users } from "lucide-react";
+import {
+  LayoutDashboard,
+  LogOut,
+  PanelLeft,
+  Users,
+  MessageSquare,
+  TrendingUp,
+  Landmark,
+  CloudSun,
+  Sprout,
+  BrainCircuit,
+  Settings,
+  Phone,
+} from "lucide-react";
 import { type CSSProperties, type ReactNode, useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { AuthLayoutSkeleton } from "./AuthLayoutSkeleton";
 import { Button } from "./ui/button";
 
 const menuItems = [
-  { icon: LayoutDashboard, label: "Page 1", path: "/" },
-  { icon: Users, label: "Page 2", path: "/some-path" },
+  { icon: LayoutDashboard, label: "Dashboard", path: "/" },
+  { icon: Users, label: "Farmers", path: "/farmers" },
+  { icon: MessageSquare, label: "Conversations", path: "/conversations" },
+  { icon: Phone, label: "WhatsApp Simulator", path: "/whatsapp" },
+  { icon: TrendingUp, label: "Market Prices", path: "/market-prices" },
+  { icon: Landmark, label: "Govt Schemes", path: "/schemes" },
+  { icon: CloudSun, label: "Weather", path: "/weather" },
+  { icon: Sprout, label: "Crop Knowledge", path: "/crop-knowledge" },
+  { icon: BrainCircuit, label: "AI Intents", path: "/ai-intents" },
+  { icon: Settings, label: "Settings", path: "/settings" },
 ];
 
 const SIDEBAR_WIDTH_KEY = "sidebar-width";
@@ -61,12 +82,17 @@ export default function AuthLayout({
       <div className="flex items-center justify-center min-h-screen">
         <div className="flex flex-col items-center gap-8 p-8 max-w-md w-full">
           <div className="flex flex-col items-center gap-6">
-            <h1 className="text-2xl font-semibold tracking-tight text-center">
-              Sign in to continue
-            </h1>
+            <div className="flex items-center gap-3">
+              <div className="h-10 w-10 bg-primary rounded-lg flex items-center justify-center">
+                <Sprout className="h-6 w-6 text-primary-foreground" />
+              </div>
+              <h1 className="text-2xl font-semibold tracking-tight">
+                AI Farmer Assistant
+              </h1>
+            </div>
             <p className="text-sm text-muted-foreground text-center max-w-sm">
-              Access to this dashboard requires authentication. Continue to
-              launch the login flow.
+              Admin dashboard for managing your AI-powered WhatsApp farmer assistant.
+              Sign in to access the dashboard.
             </p>
           </div>
           <Button
@@ -159,7 +185,6 @@ function AuthLayoutContent({
         <Sidebar
           collapsible="icon"
           className="border-r-0"
-
         >
           <SidebarHeader className="h-16 justify-center">
             <div className="flex items-center gap-3 px-2 transition-all w-full">
@@ -172,8 +197,11 @@ function AuthLayoutContent({
               </button>
               {!isCollapsed ? (
                 <div className="flex items-center gap-2 min-w-0">
-                  <span className="font-semibold tracking-tight truncate">
-                    Navigation
+                  <div className="h-7 w-7 bg-primary rounded-md flex items-center justify-center shrink-0">
+                    <Sprout className="h-4 w-4 text-primary-foreground" />
+                  </div>
+                  <span className="font-semibold tracking-tight truncate text-sm">
+                    AI Farmer Assistant
                   </span>
                 </div>
               ) : null}
@@ -259,7 +287,7 @@ function AuthLayoutContent({
             </div>
           </div>
         )}
-        <main className="flex-1 p-4">{children}</main>
+        <main className="flex-1 p-4 md:p-6">{children}</main>
       </SidebarInset>
     </>
   );
