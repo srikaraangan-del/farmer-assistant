@@ -30,6 +30,14 @@ import {
   Sprout,
   Smartphone,
   Radio,
+  Cloud,
+  CloudSun,
+  BrainCircuit,
+  Database,
+  Wifi,
+  WifiOff,
+  Bot,
+  Sparkles,
 } from "lucide-react";
 
 export default function DailyBriefings() {
@@ -42,14 +50,9 @@ export default function DailyBriefings() {
   const utils = trpc.useUtils();
 
   const { data: stats } = trpc.briefings.stats.useQuery();
-  const { data: history } = trpc.briefings.list.useQuery({
-    page,
-    limit: 20,
-  });
-  const { data: farmersList } = trpc.farmers.list.useQuery({
-    isActive: true,
-    limit: 100,
-  });
+  const { data: history } = trpc.briefings.list.useQuery({ page, limit: 20 });
+  const { data: farmersList } = trpc.farmers.list.useQuery({ isActive: true, limit: 100 });
+  const { data: dataSources } = trpc.briefings.dataSources.useQuery();
 
   const { data: preview, isLoading: previewLoading } =
     trpc.briefings.generate.useQuery(
@@ -87,26 +90,26 @@ export default function DailyBriefings() {
     sendAllMutation.mutate();
   };
 
-  // Parse WhatsApp-style message into sections for visual rendering
+  // Parse WhatsApp-style message into sections
   const parseMessage = (msg: string) => {
     const lines = msg.split("\n");
     const sections: { type: string; content: string[] }[] = [];
     let current: { type: string; content: string[] } = { type: "header", content: [] };
 
     for (const line of lines) {
-      if (line.includes("🌦️") && line.includes("WEATHER")) {
+      if (line.includes("🌦️") && (line.includes("WEATHER") || line.includes("వాతావరణం") || line.includes("मौसम"))) {
         sections.push(current);
         current = { type: "weather", content: [] };
-      } else if (line.includes("💰") && line.includes("MARKET")) {
+      } else if (line.includes("💰") && (line.includes("MARKET") || line.includes("ధరలు") || line.includes("बाजार"))) {
         sections.push(current);
         current = { type: "market", content: [] };
-      } else if (line.includes("📋") && line.includes("SCHEME")) {
+      } else if (line.includes("📋") && (line.includes("SCHEME") || line.includes("పథకాలు") || line.includes("योजनाएं"))) {
         sections.push(current);
         current = { type: "schemes", content: [] };
-      } else if (line.includes("💡") && line.includes("TIP")) {
+      } else if (line.includes("💡") && (line.includes("TIP") || line.includes("సలహా") || line.includes("सलाह"))) {
         sections.push(current);
         current = { type: "tip", content: [] };
-      } else if (line.includes("🤝") && line.includes("Need help")) {
+      } else if (line.includes("🤝") || line.includes("AI Farmer Assistant")) {
         sections.push(current);
         current = { type: "footer", content: [] };
       }
@@ -127,7 +130,7 @@ export default function DailyBriefings() {
 
   const sectionIcons: Record<string, React.ElementType> = {
     header: Sun,
-    weather: Sun,
+    weather: CloudSun,
     market: TrendingUp,
     schemes: Landmark,
     tip: Sprout,
@@ -140,7 +143,7 @@ export default function DailyBriefings() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Daily Briefings</h1>
           <p className="text-muted-foreground mt-1">
-            Automated morning briefings for farmers via WhatsApp
+            AI pulls LIVE weather, market prices, and schemes automatically
           </p>
         </div>
         <Button
@@ -218,9 +221,81 @@ export default function DailyBriefings() {
         </Card>
       </div>
 
+      {/* LIVE Data Sources Status */}
+      <Card className="border-primary/20">
+        <CardContent className="p-5">
+          <div className="flex items-center gap-2 mb-4">
+            <Sparkles className="h-5 w-5 text-primary" />
+            <h3 className="font-semibold">AI Data Sources — All Automated</h3>
+            <Badge variant="default" className="text-[10px]">NO MANUAL DATA ENTRY</Badge>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            {/* Weather */}
+            <div className={`p-4 rounded-lg border ${dataSources?.weather.connected ? "bg-sky-50 border-sky-200" : "bg-gray-50 border-gray-200"}`}>
+              <div className="flex items-center gap-2 mb-2">
+                {dataSources?.weather.connected ? (
+                  <Wifi className="h-4 w-4 text-green-600" />
+                ) : (
+                  <WifiOff className="h-4 w-4 text-gray-400" />
+                )}
+                <CloudSun className="h-5 w-5 text-sky-600" />
+                <span className="font-medium text-sm">Weather</span>
+                <Badge variant={dataSources?.weather.connected ? "default" : "secondary"} className="text-[10px] ml-auto">
+                  {dataSources?.weather.connected ? "LIVE" : "SIMULATED"}
+                </Badge>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {dataSources?.weather.source ?? "Open-Meteo API"}
+              </p>
+              <p className="text-[10px] text-muted-foreground mt-1">
+                Auto-fetches for farmer&apos;s location
+              </p>
+            </div>
+
+            {/* Market Prices */}
+            <div className={`p-4 rounded-lg border ${dataSources?.marketPrices.connected ? "bg-amber-50 border-amber-200" : "bg-gray-50 border-gray-200"}`}>
+              <div className="flex items-center gap-2 mb-2">
+                {dataSources?.marketPrices.connected ? (
+                  <Wifi className="h-4 w-4 text-green-600" />
+                ) : (
+                  <WifiOff className="h-4 w-4 text-gray-400" />
+                )}
+                <TrendingUp className="h-5 w-5 text-amber-600" />
+                <span className="font-medium text-sm">Market Prices</span>
+                <Badge variant={dataSources?.marketPrices.connected ? "default" : "secondary"} className="text-[10px] ml-auto">
+                  {dataSources?.marketPrices.connected ? "LIVE" : "SIMULATED"}
+                </Badge>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {dataSources?.marketPrices.source ?? "Agmarknet API"}
+              </p>
+              <p className="text-[10px] text-muted-foreground mt-1">
+                Filters by farmer&apos;s crop + state
+              </p>
+            </div>
+
+            {/* Schemes + AI Advice */}
+            <div className="p-4 rounded-lg border bg-purple-50 border-purple-200">
+              <div className="flex items-center gap-2 mb-2">
+                <Wifi className="h-4 w-4 text-green-600" />
+                <BrainCircuit className="h-5 w-5 text-purple-600" />
+                <span className="font-medium text-sm">AI Engine</span>
+                <Badge variant="default" className="text-[10px] ml-auto">ACTIVE</Badge>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Government DB + AI Crop Advice
+              </p>
+              <p className="text-[10px] text-muted-foreground mt-1">
+                Personalized to farmer&apos;s crop &amp; location
+              </p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
       <Tabs value={previewTab} onValueChange={setPreviewTab}>
         <TabsList className="grid w-full max-w-md grid-cols-2">
-          <TabsTrigger value="preview">Preview & Send</TabsTrigger>
+          <TabsTrigger value="preview">Preview &amp; Send</TabsTrigger>
           <TabsTrigger value="history">History</TabsTrigger>
         </TabsList>
 
@@ -237,9 +312,7 @@ export default function DailyBriefings() {
                   </h3>
                   <Select
                     value={selectedFarmerId?.toString() ?? ""}
-                    onValueChange={(v) =>
-                      setSelectedFarmerId(parseInt(v))
-                    }
+                    onValueChange={(v) => setSelectedFarmerId(parseInt(v))}
                   >
                     <SelectTrigger>
                       <SelectValue placeholder="Choose a farmer to preview" />
@@ -255,7 +328,6 @@ export default function DailyBriefings() {
                     </SelectContent>
                   </Select>
 
-                  {/* Farmer Profile Summary */}
                   {selectedFarmerId && preview?.farmer && (
                     <div className="mt-4 p-3 bg-muted/50 rounded-lg space-y-2">
                       <h4 className="text-sm font-medium">Farmer Profile</h4>
@@ -286,7 +358,36 @@ export default function DailyBriefings() {
                         </div>
                       </div>
 
-                      {/* Personalization Status */}
+                      {/* Data Sources Used */}
+                      {preview.dataSources && (
+                        <div className="pt-2 border-t">
+                          <p className="text-xs font-medium mb-1">Data Sources Used</p>
+                          <div className="flex flex-wrap gap-1">
+                            {preview.dataSources.weather === "live" && (
+                              <Badge className="text-[10px] bg-sky-100 text-sky-800">
+                                <Wifi className="h-2.5 w-2.5 mr-1" /> Live Weather
+                              </Badge>
+                            )}
+                            {preview.dataSources.marketPrices?.includes("live") && (
+                              <Badge className="text-[10px] bg-amber-100 text-amber-800">
+                                <Wifi className="h-2.5 w-2.5 mr-1" /> Live Prices
+                              </Badge>
+                            )}
+                            {preview.dataSources.schemes === "government_db" && (
+                              <Badge className="text-[10px] bg-purple-100 text-purple-800">
+                                <Database className="h-2.5 w-2.5 mr-1" /> Govt DB
+                              </Badge>
+                            )}
+                            {preview.dataSources.cropAdvice === "ai_generated" && (
+                              <Badge className="text-[10px] bg-emerald-100 text-emerald-800">
+                                <Bot className="h-2.5 w-2.5 mr-1" /> AI Advice
+                              </Badge>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Personalization */}
                       <div className="pt-2 border-t">
                         <div className="flex items-center justify-between">
                           <span className="text-xs font-medium">Personalized</span>
@@ -295,18 +396,16 @@ export default function DailyBriefings() {
                         <p className="text-[10px] text-muted-foreground mt-1">
                           {preview.personalizationUsed
                             ? "Content tailored to farmer's crop & location"
-                            : "Add crop & location to farmer profile for personalization"}
+                            : "Add crop & location for personalization"}
                         </p>
                       </div>
 
                       {/* Content Sections */}
                       <div className="pt-2 border-t space-y-1">
-                        <p className="text-xs font-medium">Included Sections</p>
+                        <p className="text-xs font-medium">Message Sections</p>
                         <div className="flex flex-wrap gap-1">
                           {preview.sections.weather && (
-                            <Badge className="text-[10px] bg-sky-100 text-sky-800">
-                              Weather
-                            </Badge>
+                            <Badge className="text-[10px] bg-sky-100 text-sky-800">Weather</Badge>
                           )}
                           {preview.sections.marketPrices > 0 && (
                             <Badge className="text-[10px] bg-amber-100 text-amber-800">
@@ -319,9 +418,7 @@ export default function DailyBriefings() {
                             </Badge>
                           )}
                           {preview.sections.cropTip && (
-                            <Badge className="text-[10px] bg-emerald-100 text-emerald-800">
-                              Crop Tip
-                            </Badge>
+                            <Badge className="text-[10px] bg-emerald-100 text-emerald-800">Crop Tip</Badge>
                           )}
                         </div>
                       </div>
@@ -343,28 +440,49 @@ export default function DailyBriefings() {
                 </CardContent>
               </Card>
 
-              {/* Personalization Guide */}
+              {/* How It Works */}
               <Card>
                 <CardContent className="p-5">
-                  <h3 className="font-semibold mb-2 flex items-center gap-2">
-                    <Sprout className="h-4 w-4" />
-                    How Personalization Works
+                  <h3 className="font-semibold mb-3 flex items-center gap-2">
+                    <Sparkles className="h-4 w-4 text-primary" />
+                    How Auto-Pull Works
                   </h3>
-                  <div className="space-y-2 text-sm text-muted-foreground">
-                    <p>
-                      When a farmer sets their <strong>crop</strong>, <strong>location</strong>, and{" "}
-                      <strong>language</strong> in their profile:
-                    </p>
-                    <ul className="space-y-1 list-disc list-inside">
-                      <li>Weather shows their local area</li>
-                      <li>Market prices show their crop rates</li>
-                      <li>Government schemes filtered by their state</li>
-                      <li>Farming tips specific to their crop</li>
-                      <li>Entire message in their language</li>
-                    </ul>
-                    <p className="text-xs pt-1">
-                      Farmers without profiles still receive briefings with general data.
-                    </p>
+                  <div className="space-y-3 text-sm text-muted-foreground">
+                    <div className="flex gap-3">
+                      <div className="h-6 w-6 rounded-full bg-sky-100 flex items-center justify-center shrink-0 text-xs font-bold text-sky-700">1</div>
+                      <div>
+                        <p className="font-medium text-foreground text-xs">Weather API</p>
+                        <p className="text-xs">Fetches live weather for farmer&apos;s district from Open-Meteo</p>
+                      </div>
+                    </div>
+                    <div className="flex gap-3">
+                      <div className="h-6 w-6 rounded-full bg-amber-100 flex items-center justify-center shrink-0 text-xs font-bold text-amber-700">2</div>
+                      <div>
+                        <p className="font-medium text-foreground text-xs">Market API</p>
+                        <p className="text-xs">Pulls mandi prices from Agmarknet, filtered by crop &amp; state</p>
+                      </div>
+                    </div>
+                    <div className="flex gap-3">
+                      <div className="h-6 w-6 rounded-full bg-purple-100 flex items-center justify-center shrink-0 text-xs font-bold text-purple-700">3</div>
+                      <div>
+                        <p className="font-medium text-foreground text-xs">Government Schemes</p>
+                        <p className="text-xs">Auto-selects schemes relevant to farmer&apos;s state</p>
+                      </div>
+                    </div>
+                    <div className="flex gap-3">
+                      <div className="h-6 w-6 rounded-full bg-emerald-100 flex items-center justify-center shrink-0 text-xs font-bold text-emerald-700">4</div>
+                      <div>
+                        <p className="font-medium text-foreground text-xs">AI Crop Advice</p>
+                        <p className="text-xs">Generates personalized tips based on crop type</p>
+                      </div>
+                    </div>
+                    <div className="flex gap-3">
+                      <div className="h-6 w-6 rounded-full bg-green-100 flex items-center justify-center shrink-0 text-xs font-bold text-green-700">5</div>
+                      <div>
+                        <p className="font-medium text-foreground text-xs">Card Message</p>
+                        <p className="text-xs">All sections combined into one visual WhatsApp card</p>
+                      </div>
+                    </div>
                   </div>
                 </CardContent>
               </Card>
@@ -376,12 +494,12 @@ export default function DailyBriefings() {
                 <CardContent className="p-5">
                   <h3 className="font-semibold mb-3 flex items-center gap-2">
                     <Eye className="h-4 w-4" />
-                    WhatsApp Preview
+                    WhatsApp Card Preview
                   </h3>
 
                   {!selectedFarmerId ? (
                     <div className="h-[500px] flex items-center justify-center text-muted-foreground text-sm">
-                      Select a farmer to preview their personalized briefing
+                      Select a farmer to see their AI-generated briefing
                     </div>
                   ) : previewLoading ? (
                     <div className="space-y-3">
@@ -396,8 +514,7 @@ export default function DailyBriefings() {
                       {preview.error}
                     </div>
                   ) : (
-                    <div className="bg-[#e5ddd5] rounded-lg p-3 max-h-[550px] overflow-y-auto">
-                      {/* WhatsApp Bubble */}
+                    <div className="bg-[#e5ddd5] rounded-lg p-3 max-h-[600px] overflow-y-auto">
                       <div className="bg-white rounded-lg shadow-sm p-4 max-w-[95%]">
                         {preview?.message
                           ? parseMessage(preview.message).map((section, i) => {
@@ -406,10 +523,10 @@ export default function DailyBriefings() {
                                 <div key={i}>
                                   {section.type !== "header" && (
                                     <div className={`my-2 p-2 rounded-md border ${sectionColors[section.type] ?? "bg-gray-50"}`}>
-                                      <div className="flex items-center gap-1.5 mb-1">
+                                      <div className="flex items-center gap-1.5">
                                         <Icon className="h-3.5 w-3.5" />
                                         <span className="text-[10px] font-semibold uppercase tracking-wider opacity-60">
-                                          {section.type}
+                                          {section.type === "weather" ? "Live Weather" : section.type === "market" ? "Live Market" : section.type === "schemes" ? "Govt Schemes" : section.type === "tip" ? "AI Crop Tip" : section.type}
                                         </span>
                                       </div>
                                     </div>
@@ -419,9 +536,7 @@ export default function DailyBriefings() {
                                       key={j}
                                       className="text-sm whitespace-pre-wrap leading-relaxed"
                                       dangerouslySetInnerHTML={{
-                                        __html: line
-                                          .replace(/\*(.*?)\*/g, "<strong>$1</strong>")
-                                          .replace(/─+/g, "<span class='text-gray-300'>${'─'.repeat(20)}</span>"),
+                                        __html: line.replace(/\*(.*?)\*/g, "<strong>$1</strong>"),
                                       }}
                                     />
                                   ))}
@@ -431,7 +546,7 @@ export default function DailyBriefings() {
                           : null}
                       </div>
                       <p className="text-[10px] text-gray-500 text-center mt-2">
-                        This is how the message appears in WhatsApp
+                        AI-generated card with live data — no manual entry needed
                       </p>
                     </div>
                   )}
@@ -460,20 +575,15 @@ export default function DailyBriefings() {
                         <th className="text-left px-4 py-3 font-medium">Language</th>
                         <th className="text-left px-4 py-3 font-medium">Status</th>
                         <th className="text-left px-4 py-3 font-medium">Personalized</th>
+                        <th className="text-left px-4 py-3 font-medium">Data</th>
                         <th className="text-left px-4 py-3 font-medium">Sent At</th>
-                        <th className="text-left px-4 py-3 font-medium">Preview</th>
                       </tr>
                     </thead>
                     <tbody>
                       {history.items.map((item) => (
-                        <tr
-                          key={item.id}
-                          className="border-b hover:bg-muted/30 transition-colors"
-                        >
+                        <tr key={item.id} className="border-b hover:bg-muted/30 transition-colors">
                           <td className="px-4 py-3">
-                            <div className="font-medium">
-                              {item.farmerName ?? item.farmerPhone ?? "Unknown"}
-                            </div>
+                            <div className="font-medium">{item.farmerName ?? item.farmerPhone ?? "Unknown"}</div>
                           </td>
                           <td className="px-4 py-3">
                             <Badge variant="outline" className="capitalize text-xs">
@@ -481,43 +591,37 @@ export default function DailyBriefings() {
                             </Badge>
                           </td>
                           <td className="px-4 py-3">
-                            <Badge
-                              className={
-                                item.status === "sent"
-                                  ? "bg-green-100 text-green-800"
-                                  : item.status === "failed"
-                                    ? "bg-red-100 text-red-800"
-                                    : "bg-amber-100 text-amber-800"
-                              }
-                            >
+                            <Badge className={item.status === "sent" ? "bg-green-100 text-green-800" : item.status === "failed" ? "bg-red-100 text-red-800" : "bg-amber-100 text-amber-800"}>
                               {item.status}
                             </Badge>
                           </td>
                           <td className="px-4 py-3">
-                            <Switch
-                              checked={item.personalizationUsed ?? false}
-                              disabled
-                              className="scale-75"
-                            />
-                          </td>
-                          <td className="px-4 py-3 text-muted-foreground text-xs">
-                            {item.sentAt
-                              ? new Date(item.sentAt).toLocaleString("en-IN")
-                              : "-"}
+                            <Switch checked={item.personalizationUsed ?? false} disabled className="scale-75" />
                           </td>
                           <td className="px-4 py-3">
-                            <div className="max-w-[300px] truncate text-xs text-muted-foreground">
-                              {item.generatedMessage?.split("\n")[0] ?? "-"}
+                            <div className="flex flex-wrap gap-1">
+                              {item.weatherIncluded && (
+                                <Badge className="text-[10px] bg-sky-100 text-sky-800"><Cloud className="h-2 w-2 mr-0.5" /></Badge>
+                              )}
+                              {item.marketPricesIncluded && (
+                                <Badge className="text-[10px] bg-amber-100 text-amber-800"><TrendingUp className="h-2 w-2 mr-0.5" /></Badge>
+                              )}
+                              {item.schemesIncluded && (
+                                <Badge className="text-[10px] bg-purple-100 text-purple-800"><Landmark className="h-2 w-2 mr-0.5" /></Badge>
+                              )}
+                              {item.cropTipIncluded && (
+                                <Badge className="text-[10px] bg-emerald-100 text-emerald-800"><Sprout className="h-2 w-2 mr-0.5" /></Badge>
+                              )}
                             </div>
+                          </td>
+                          <td className="px-4 py-3 text-muted-foreground text-xs">
+                            {item.sentAt ? new Date(item.sentAt).toLocaleString("en-IN") : "-"}
                           </td>
                         </tr>
                       ))}
                       {history.items.length === 0 && (
                         <tr>
-                          <td
-                            colSpan={6}
-                            className="text-center py-12 text-muted-foreground"
-                          >
+                          <td colSpan={6} className="text-center py-12 text-muted-foreground">
                             No briefings sent yet. Preview and send your first one!
                           </td>
                         </tr>
@@ -531,25 +635,11 @@ export default function DailyBriefings() {
 
           {history && history.totalPages > 1 && (
             <div className="flex items-center justify-end gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setPage((p) => Math.max(1, p - 1))}
-                disabled={page === 1}
-              >
+              <Button variant="outline" size="sm" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page === 1}>
                 <ChevronLeft className="h-4 w-4" />
               </Button>
-              <span className="text-sm">
-                Page {page} of {history.totalPages}
-              </span>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() =>
-                  setPage((p) => Math.min(history.totalPages, p + 1))
-                }
-                disabled={page === history.totalPages}
-              >
+              <span className="text-sm">Page {page} of {history.totalPages}</span>
+              <Button variant="outline" size="sm" onClick={() => setPage((p) => Math.min(history.totalPages, p + 1))} disabled={page === history.totalPages}>
                 <ChevronRight className="h-4 w-4" />
               </Button>
             </div>

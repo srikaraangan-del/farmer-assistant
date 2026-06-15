@@ -10,7 +10,10 @@ import {
   Sprout,
   Activity,
   Phone,
+  Newspaper,
+  Wifi,
 } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { Link } from "react-router";
 
 function KpiCard({
@@ -170,16 +173,49 @@ export default function Dashboard() {
               color="bg-teal-500"
             />
             <KpiCard
-              title="WhatsApp Status"
-              value="Active"
-              subtitle="webhook online"
-              icon={Sprout}
-              href="/whatsapp"
+              title="Daily Briefings"
+              value="Auto"
+              subtitle="AI pulls live data"
+              icon={Newspaper}
+              href="/briefings"
               color="bg-emerald-500"
             />
           </>
         )}
       </div>
+
+      {/* Live Data Sources Banner */}
+      <Card className="bg-gradient-to-r from-sky-50 via-amber-50 to-purple-50 border-primary/20">
+        <CardContent className="p-4">
+          <div className="flex items-center justify-between flex-wrap gap-3">
+            <div className="flex items-center gap-3">
+              <div className="h-10 w-10 bg-primary/10 rounded-lg flex items-center justify-center">
+                <Wifi className="h-5 w-5 text-primary" />
+              </div>
+              <div>
+                <h3 className="font-semibold text-sm">AI Auto-Pull System Active</h3>
+                <p className="text-xs text-muted-foreground">
+                  Weather, market prices, and schemes fetched automatically — no manual data entry
+                </p>
+              </div>
+            </div>
+            <div className="flex gap-2 flex-wrap">
+              <Badge variant="secondary" className="text-xs bg-sky-100 text-sky-800 hover:bg-sky-100">
+                <CloudSun className="h-3 w-3 mr-1" /> Live Weather
+              </Badge>
+              <Badge variant="secondary" className="text-xs bg-amber-100 text-amber-800 hover:bg-amber-100">
+                <TrendingUp className="h-3 w-3 mr-1" /> Live Prices
+              </Badge>
+              <Badge variant="secondary" className="text-xs bg-purple-100 text-purple-800 hover:bg-purple-100">
+                <Landmark className="h-3 w-3 mr-1" /> Govt Schemes
+              </Badge>
+              <Badge variant="secondary" className="text-xs bg-emerald-100 text-emerald-800 hover:bg-emerald-100">
+                <Sprout className="h-3 w-3 mr-1" /> AI Crop Tips
+              </Badge>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Charts & Tables */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

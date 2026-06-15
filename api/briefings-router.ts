@@ -1,8 +1,15 @@
 import { z } from "zod";
 import { createRouter, publicQuery } from "./middleware";
 import { getDb } from "./queries/connection";
-import { dailyBriefings, farmers, marketPrices, governmentSchemes, weatherCache, cropKnowledge } from "@db/schema";
-import { eq, and, desc, count, sql, like } from "drizzle-orm";
+import { dailyBriefings, farmers } from "@db/schema";
+import { eq, desc, count, sql } from "drizzle-orm";
+import {
+  fetchWeather,
+  fetchMarketPrices,
+  fetchSchemes,
+  generateCropAdvice,
+  checkDataSources,
+} from "./lib/external-apis";
 
 // ============ PERSONALIZED MESSAGE ENGINE ============
 
@@ -17,16 +24,14 @@ interface FarmerProfile {
   primaryCrop: string | null;
 }
 
-interface BriefingData {
-  weather: typeof weatherCache.$inferSelect | null;
-  marketPrices: (typeof marketPrices.$inferSelect)[];
-  schemes: (typeof governmentSchemes.$inferSelect)[];
-  cropTip: typeof cropKnowledge.$inferSelect | null;
-}
-
 function generateCardMessage(
   farmer: FarmerProfile,
-  data: BriefingData,
+  data: {
+    weather: Awaited<ReturnType<typeof fetchWeather>>;
+    marketPrices: Awaited<ReturnType<typeof fetchMarketPrices>>;
+    schemes: ReturnType<typeof fetchSchemes>;
+    cropTip: ReturnType<typeof generateCropAdvice>;
+  },
   lang: string
 ): string {
   const dateStr = new Date().toLocaleDateString("en-IN", {
@@ -36,146 +41,179 @@ function generateCardMessage(
     day: "numeric",
   });
 
-  // Greetings in different languages
+  // Greetings
   const greetings: Record<string, string> = {
-    telugu: `నమస్కారం *${farmer.name ?? "రైతు మిత్రుడా"}*!`,
-    hindi: `नमस्ते *${farmer.name ?? "किसान भाई"}*!`,
-    english: `Hello *${farmer.name ?? "Farmer Friend"}*!`,
+    telugu: `నమస్కారం *${farmer.name ?? "రైతు మిత్రుడా"}*! 🙏`,
+    hindi: `नमस्ते *${farmer.name ?? "किसान भाई"}*! 🙏`,
+    english: `Good Morning *${farmer.name ?? "Farmer Friend"}*! 🌅`,
   };
 
-  const sections: Record<string, Record<string, string>> = {
+  // Advisories based on weather
+  const advisories: Record<string, Record<string, string>> = {
     telugu: {
+      sprayOk: "☀️ పురుగు మందు స్ప్రే చేయడానికి మంచి రోజు",
+      delaySpray: "🌧️ వర్షం ఉంది. పురుగు మందు స్ప్రే వాయిదా వేయండి",
+      irrigate: "💧 సేంద్రీయ పొలాలకు నీరు పంపించండి",
+      hot: "🌡️ వేడిగా ఉంది. త్రాగు నీరు ఎక్కువగా తీసుకోండి",
+    },
+    hindi: {
+      sprayOk: "☀️ कीटनाशक स्प्रे करने के लिए अच्छा दिन",
+      delaySpray: "🌧️ बारिश की संभावना। स्प्रे टालें",
+      irrigate: "💧 खेतों में सिंचाई करें",
+      hot: "🌡️ गर्मी है। खूब पानी पिएं",
+    },
+    english: {
+      sprayOk: "☀️ Good day for spraying pesticides",
+      delaySpray: "🌧️ Rain expected. Delay pesticide spraying",
+      irrigate: "💧 Irrigate fields if needed",
+      hot: "🌡️ Very hot! Ensure adequate water intake",
+    },
+  };
+
+  // Section titles
+  const t: Record<string, Record<string, string>> = {
+    telugu: {
+      header: "🌾 రోజువారీ రైతు సమాచారం",
       weatherTitle: "🌦️ వాతావరణం",
       marketTitle: "💰 మార్కెట్ ధరలు",
       schemesTitle: "📋 ప్రభుత్వ పథకాలు",
-      tipTitle: "💡 వ్యవసాయ సలహా",
-      helpText: "🤝 సహాయం కావాలా? మీ ప్రశ్న రిప్లై చేయండి!",
-      locationLabel: "📍 ప్రాంతం",
-      cropLabel: "🌾 పంట",
-      tempLabel: "ఉష్ణోగ్రత",
-      humidityLabel: "తేమ",
-      windLabel: "గాలి",
-      rainLabel: "వర్షం",
+      tipTitle: "💡 ఈరోజు సలహా",
+      footer: "🤝 సహాయం కావాలా? మీ ప్రశ్న రిప్లై చేయండి!",
+      temp: "ఉష్ణోగ్రత",
+      feels: "అనుభవం",
+      humidity: "తేమ",
+      wind: "గాలి",
+      rain: "వర్షం",
       perQuintal: "క్వింటాకు",
       trendUp: "⬆️ పెరుగుదల",
       trendDown: "⬇️ తగ్గుదల",
       trendStable: "➡️ స్థిరం",
-      sellAdvice: "ధరలు పెరుగుతున్నాయి. అమ్మడానికి మంచి సమయం!",
-      holdAdvice: "ధరలు స్థిరంగా ఉన్నాయి. మరింత నిరీక్షించండి.",
-      buyAdvice: "ధరలు తగ్గుతున్నాయి. కొనుగోలు చేయడానికి మంచి సమయం!",
+      today: "నేటి",
+      tomorrow: "రేపటి",
+      dayAfter: "ఎల్లుండి",
     },
     hindi: {
+      header: "🌾 दैनिक किसान जानकारी",
       weatherTitle: "🌦️ मौसम",
       marketTitle: "💰 बाजार भाव",
       schemesTitle: "📋 सरकारी योजनाएं",
-      tipTitle: "💡 खेती की सलाह",
-      helpText: "🤝 मदद चाहिए? अपना सवाल भेजें!",
-      locationLabel: "📍 स्थान",
-      cropLabel: "🌾 फसल",
-      tempLabel: "तापमान",
-      humidityLabel: "नमी",
-      windLabel: "हवा",
-      rainLabel: "बारिश",
+      tipTitle: "💡 आज की सलाह",
+      footer: "🤝 मदद चाहिए? अपना सवाल भेजें!",
+      temp: "तापमान",
+      feels: "अनुभव",
+      humidity: "नमी",
+      wind: "हवा",
+      rain: "बारिश",
       perQuintal: "प्रति क्विंटल",
       trendUp: "⬆️ बढ़ता",
       trendDown: "⬇️ घटता",
       trendStable: "➡️ स्थिर",
-      sellAdvice: "भाव बढ़ रहे हैं। बेचने का अच्छा समय!",
-      holdAdvice: "भाव स्थिर हैं। और इंतजार करें।",
-      buyAdvice: "भाव घट रहे हैं। खरीदने का अच्छा समय!",
+      today: "आज",
+      tomorrow: "कल",
+      dayAfter: "परसों",
     },
     english: {
+      header: "🌾 DAILY FARMER BRIEFING",
       weatherTitle: "🌦️ WEATHER",
       marketTitle: "💰 MARKET PRICES",
       schemesTitle: "📋 GOVERNMENT SCHEMES",
-      tipTitle: "💡 FARMING TIP",
-      helpText: "🤝 Need help? Reply with your question!",
-      locationLabel: "📍 Location",
-      cropLabel: "🌾 Your Crop",
-      tempLabel: "Temperature",
-      humidityLabel: "Humidity",
-      windLabel: "Wind",
-      rainLabel: "Rain",
+      tipTitle: "💡 TODAY'S TIP",
+      footer: "🤝 Need help? Reply with your question!",
+      temp: "Temperature",
+      feels: "Feels like",
+      humidity: "Humidity",
+      wind: "Wind",
+      rain: "Rain chance",
       perQuintal: "per quintal",
       trendUp: "⬆️ Rising",
       trendDown: "⬇️ Falling",
       trendStable: "➡️ Stable",
-      sellAdvice: "Prices rising. Good time to sell!",
-      holdAdvice: "Prices stable. Wait for better rates.",
-      buyAdvice: "Prices falling. Good time to buy!",
+      today: "Today",
+      tomorrow: "Tomorrow",
+      dayAfter: "Day after",
     },
   };
 
-  const t = sections[lang] ?? sections.english;
+  const l = t[lang] ?? t.english;
+  const adv = advisories[lang] ?? advisories.english;
 
   let message = "";
 
   // ===== HEADER =====
-  message += `🌤️ *DAILY FARMER BRIEFING*\n`;
-  message += `${dateStr}\n`;
+  message += `${l.header}\n`;
+  message += `📅 ${dateStr}\n`;
   message += `${"─".repeat(30)}\n\n`;
-  message += `${greetings[lang] ?? greetings.english}\n\n`;
-  message += `${t.locationLabel}: ${farmer.district ?? farmer.location ?? "Your area"}${farmer.state ? `, ${farmer.state}` : ""}\n`;
+  message += `${greetings[lang] ?? greetings.english}\n`;
+  if (farmer.district || farmer.location) {
+    message += `📍 ${farmer.district ?? farmer.location}${farmer.state ? `, ${farmer.state}` : ""}\n`;
+  }
   if (farmer.primaryCrop) {
-    message += `${t.cropLabel}: ${farmer.primaryCrop}\n`;
+    message += `🌾 Your Crop: *${farmer.primaryCrop}*\n`;
   }
   message += `\n${"─".repeat(30)}\n`;
 
   // ===== WEATHER SECTION =====
   if (data.weather) {
     const w = data.weather;
-    message += `\n${t.weatherTitle}\n`;
+    message += `\n${l.weatherTitle}\n`;
     message += `${"─".repeat(20)}\n`;
-    message += `🌡️ ${t.tempLabel}: *${w.temperature}°C* (feels like ${w.feelsLike ?? w.temperature}°C)\n`;
-    message += `💧 ${t.humidityLabel}: *${w.humidity}%*\n`;
-    message += `🍃 ${t.windLabel}: *${w.windSpeed} km/h*\n`;
-    message += `🌧️ ${t.rainLabel}: *${w.rainProbability}%*\n`;
+    message += `🌡️ ${l.temp}: *${w.temperature}°C* (${l.feels} ${w.feelsLike}°C)\n`;
+    message += `💧 ${l.humidity}: *${w.humidity}%*\n`;
+    message += `🍃 ${l.wind}: *${w.windSpeed} km/h ${w.windDirection}*\n`;
+    message += `🌧️ ${l.rain}: *${w.rainProbability}%*\n`;
     message += `☁️ ${w.weatherCondition}\n`;
 
-    // Smart advice based on weather
-    if ((w.rainProbability ?? 0) > 50) {
-      message += `\n⚠️ *High rain expected!* Avoid spraying pesticides today.\n`;
-    } else if ((w.temperature ?? 0) > 38) {
-      message += `\n⚠️ *Very hot!* Ensure adequate irrigation.\n`;
+    // Weather advisory
+    if (w.rainProbability > 50) {
+      message += `\n${adv.delaySpray}\n`;
+    } else if (w.temperature > 38) {
+      message += `\n${adv.hot}\n`;
+    } else if (w.rainProbability < 20 && w.temperature > 25) {
+      message += `\n${adv.sprayOk}\n`;
     } else {
-      message += `\n✅ Good weather for field work!\n`;
+      message += `\n${adv.irrigate}\n`;
+    }
+
+    // 3-day forecast
+    if (w.forecast && w.forecast.length > 0) {
+      message += `\n📅 *3-Day Forecast:*\n`;
+      const labels = [l.today, l.tomorrow, l.dayAfter];
+      w.forecast.forEach((f, i) => {
+        const label = labels[i + 1] ?? `Day ${i + 1}`;
+        message += `${label}: ${f.temp}°C, 💧${f.rainProb}% ${f.condition}\n`;
+      });
     }
   }
 
   // ===== MARKET PRICES SECTION =====
   if (data.marketPrices.length > 0) {
-    message += `\n${t.marketTitle}\n`;
+    message += `\n${l.marketTitle}\n`;
     message += `${"─".repeat(20)}\n`;
 
     data.marketPrices.slice(0, 3).forEach((mp) => {
       const trendText =
-        mp.priceTrend === "up"
-          ? t.trendUp
-          : mp.priceTrend === "down"
-            ? t.trendDown
-            : t.trendStable;
+        mp.trend === "up" ? l.trendUp : mp.trend === "down" ? l.trendDown : l.trendStable;
 
       message += `📌 *${mp.commodity}*${mp.variety ? ` (${mp.variety})` : ""}\n`;
-      message += `   ${mp.mandiName}: *₹${Math.round(mp.pricePerQuintal).toLocaleString("en-IN")}* ${t.perQuintal}\n`;
-      message += `   ${trendText}\n`;
+      message += `   📍 ${mp.mandi}${mp.district ? `, ${mp.district}` : ""}\n`;
+      message += `   💰 *₹${Math.round(mp.price).toLocaleString("en-IN")}* ${l.perQuintal}\n`;
+      message += `   📊 ${trendText}`;
 
-      // Personalized advice for farmer's crop
+      // Personalized crop advice
       if (farmer.primaryCrop && mp.commodity.toLowerCase().includes(farmer.primaryCrop.toLowerCase())) {
-        const advice =
-          mp.priceTrend === "up"
-            ? t.sellAdvice
-            : mp.priceTrend === "down"
-              ? t.buyAdvice
-              : t.holdAdvice;
-        message += `   💡 *${advice}*\n`;
+        if (mp.trend === "up") {
+          message += `\n   💡 *${lang === "telugu" ? "ధరలు పెరుగుతున్నాయి - అమ్మడానికి మంచి సమయం!" : lang === "hindi" ? "भाव बढ़ रहे हैं - बेचने का अच्छा समय!" : "Prices rising - Good time to sell!"}*`;
+        } else if (mp.trend === "down") {
+          message += `\n   💡 *${lang === "telugu" ? "ధరలు తగ్గుతున్నాయి - కొనుగోలు చేయడానికి మంచి సమయం!" : lang === "hindi" ? "भाव घट रहे हैं - खरीदने का अच्छा समय!" : "Prices falling - Good time to buy!"}*`;
+        }
       }
-      message += `\n`;
+      message += `\n\n`;
     });
   }
 
   // ===== SCHEMES SECTION =====
   if (data.schemes.length > 0) {
-    message += `${t.schemesTitle}\n`;
+    message += `${l.schemesTitle}\n`;
     message += `${"─".repeat(20)}\n`;
 
     data.schemes.slice(0, 3).forEach((s) => {
@@ -188,15 +226,15 @@ function generateCardMessage(
 
       message += `• *${title}*\n`;
       if (s.benefits) {
-        message += `  ${s.benefits.substring(0, 80)}${s.benefits.length > 80 ? "..." : ""}\n`;
+        message += `  ✅ ${s.benefits.substring(0, 80)}${s.benefits.length > 80 ? "..." : ""}\n`;
       }
     });
-    message += `\nReply *SCHEME* for more details\n`;
+    message += `\n${lang === "telugu" ? "మరింత సమాచారం కోసం *SCHEME* అని రిప్లై చేయండి" : lang === "hindi" ? "और जानकारी के लिए *SCHEME* लिखें" : "Reply *SCHEME* for more info"}\n`;
   }
 
   // ===== CROP TIP SECTION =====
   if (data.cropTip) {
-    message += `\n${t.tipTitle}\n`;
+    message += `\n${l.tipTitle}\n`;
     message += `${"─".repeat(20)}\n`;
 
     const tipContent =
@@ -207,22 +245,18 @@ function generateCardMessage(
           : data.cropTip.content;
 
     message += `🌿 *${data.cropTip.title}*\n`;
-    message += `${tipContent.substring(0, 200)}${tipContent.length > 200 ? "..." : ""}\n`;
-    message += `\nReply *TIP* for more advice\n`;
-  } else if (farmer.primaryCrop) {
-    // Generic tip if no specific tip found
-    message += `\n${t.tipTitle}\n`;
-    message += `${"─".repeat(20)}\n`;
-    message += `🌿 General tips for *${farmer.primaryCrop}*:\n`;
-    message += `• Monitor soil moisture regularly\n`;
-    message += `• Watch for pest signs in early stages\n`;
-    message += `• Apply fertilizer based on soil test\n`;
+    message += `${tipContent.substring(0, 250)}${tipContent.length > 250 ? "..." : ""}\n`;
+
+    if (data.cropTip.category) {
+      message += `\n🏷️ Category: ${data.cropTip.category}\n`;
+    }
   }
 
   // ===== FOOTER =====
   message += `\n${"─".repeat(30)}\n`;
-  message += `${t.helpText}\n`;
-  message += `Powered by AI Farmer Assistant 🤖\n`;
+  message += `${l.footer}\n`;
+  message += `🤖 AI Farmer Assistant\n`;
+  message += `⚡ Live data: Weather + Market + Schemes\n`;
 
   return message;
 }
@@ -230,17 +264,12 @@ function generateCardMessage(
 // ============ ROUTER ============
 
 export const briefingsRouter = createRouter({
-  // Generate a personalized briefing for a farmer
+  // Generate a personalized briefing - PULLS ALL DATA FROM EXTERNAL APIs
   generate: publicQuery
-    .input(
-      z.object({
-        farmerId: z.number(),
-      })
-    )
+    .input(z.object({ farmerId: z.number() }))
     .query(async ({ input }) => {
-      const db = getDb();
-
       // 1. Get farmer profile
+      const db = getDb();
       const farmerRows = await db
         .select()
         .from(farmers)
@@ -248,115 +277,35 @@ export const briefingsRouter = createRouter({
         .limit(1);
 
       const farmer = farmerRows[0];
-      if (!farmer) {
-        return { error: "Farmer not found" };
-      }
+      if (!farmer) return { error: "Farmer not found" };
 
       const lang = farmer.preferredLanguage ?? "english";
+      const location = farmer.district ?? farmer.location ?? "Hyderabad";
 
-      // 2. Get weather for farmer's location
-      const weatherRows = farmer.district
-        ? await db
-            .select()
-            .from(weatherCache)
-            .where(
-              and(
-                eq(weatherCache.district, farmer.district),
-                sql`${weatherCache.expiresAt} > NOW()`,
-                sql`${weatherCache.forecastDays} = 0`
-              )
-            )
-            .orderBy(desc(weatherCache.fetchedAt))
-            .limit(1)
-        : [];
+      // 2. FETCH WEATHER LIVE from Open-Meteo API
+      const weather = await fetchWeather(location);
 
-      // 3. Get market prices
-      const crop = farmer.primaryCrop;
-      const state = farmer.state;
+      // 3. FETCH MARKET PRICES LIVE from Agmarknet
+      const marketPrices = await fetchMarketPrices(
+        farmer.primaryCrop ?? undefined,
+        farmer.state ?? undefined
+      );
 
-      let priceRows: (typeof marketPrices.$inferSelect)[] = [];
-      if (crop) {
-        priceRows = await db
-          .select()
-          .from(marketPrices)
-          .where(
-            and(
-              like(marketPrices.commodity, `%${crop}%`),
-              eq(marketPrices.isActive, true)
-            )
-          )
-          .orderBy(desc(marketPrices.priceDate))
-          .limit(3);
-      }
+      // 4. FETCH SCHEMES from government database
+      const schemes = fetchSchemes(farmer.state ?? undefined, 3);
 
-      // If no crop-specific prices, get state-level prices
-      if (priceRows.length === 0 && state) {
-        priceRows = await db
-          .select()
-          .from(marketPrices)
-          .where(
-            and(
-              like(marketPrices.state, `%${state}%`),
-              eq(marketPrices.isActive, true)
-            )
-          )
-          .orderBy(desc(marketPrices.priceDate))
-          .limit(3);
-      }
+      // 5. GENERATE AI CROP ADVICE based on farmer's crop
+      const cropTip = generateCropAdvice(
+        farmer.primaryCrop ?? "",
+        farmer.district ?? undefined,
+        undefined,
+        lang
+      );
 
-      // Fallback: get any recent prices
-      if (priceRows.length === 0) {
-        priceRows = await db
-          .select()
-          .from(marketPrices)
-          .where(eq(marketPrices.isActive, true))
-          .orderBy(desc(marketPrices.priceDate))
-          .limit(3);
-      }
-
-      // 4. Get relevant government schemes
-      const schemeRows = await db
-        .select()
-        .from(governmentSchemes)
-        .where(
-          and(
-            farmer.state
-              ? sql`(${governmentSchemes.stateSpecific} IS NULL OR ${governmentSchemes.stateSpecific} LIKE ${`%${farmer.state}%`})`
-              : sql`1=1`,
-            eq(governmentSchemes.isActive, true)
-          )
-        )
-        .orderBy(desc(governmentSchemes.createdAt))
-        .limit(3);
-
-      // 5. Get crop-specific tip
-      let tipRow: (typeof cropKnowledge.$inferSelect) | null = null;
-      if (crop) {
-        const tips = await db
-          .select()
-          .from(cropKnowledge)
-          .where(
-            and(
-              like(cropKnowledge.cropName, `%${crop}%`),
-              eq(cropKnowledge.isActive, true)
-            )
-          )
-          .orderBy(desc(cropKnowledge.viewCount))
-          .limit(1);
-        tipRow = tips[0] ?? null;
-      }
-
-      // 6. Generate the card message
-      const briefingData: BriefingData = {
-        weather: weatherRows[0] ?? null,
-        marketPrices: priceRows,
-        schemes: schemeRows,
-        cropTip: tipRow,
-      };
-
+      // 6. Generate the visual card message
       const message = generateCardMessage(
         farmer as FarmerProfile,
-        briefingData,
+        { weather, marketPrices, schemes, cropTip },
         lang
       );
 
@@ -371,26 +320,26 @@ export const briefingsRouter = createRouter({
         },
         message,
         sections: {
-          weather: !!briefingData.weather,
-          marketPrices: briefingData.marketPrices.length,
-          schemes: briefingData.schemes.length,
-          cropTip: !!briefingData.cropTip,
+          weather: !!weather,
+          marketPrices: marketPrices.length,
+          schemes: schemes.length,
+          cropTip: !!cropTip,
         },
-        personalizationUsed: !!(crop || farmer.district || farmer.state),
+        personalizationUsed: !!(farmer.primaryCrop || farmer.district || farmer.state),
+        dataSources: {
+          weather: weather ? "live" : "simulated",
+          marketPrices: marketPrices.length > 0 ? "live/simulated" : "unavailable",
+          schemes: "government_db",
+          cropAdvice: cropTip ? "ai_generated" : "unavailable",
+        },
       };
     }),
 
-  // Send the briefing (creates a record + simulates WhatsApp send)
+  // Send briefing to a single farmer
   send: publicQuery
-    .input(
-      z.object({
-        farmerId: z.number(),
-      })
-    )
+    .input(z.object({ farmerId: z.number() }))
     .mutation(async ({ input }) => {
       const db = getDb();
-
-      // Get farmer
       const farmerRows = await db
         .select()
         .from(farmers)
@@ -398,262 +347,77 @@ export const briefingsRouter = createRouter({
         .limit(1);
 
       const farmer = farmerRows[0];
-      if (!farmer) {
-        return { error: "Farmer not found" };
-      }
+      if (!farmer) return { error: "Farmer not found" };
 
       const lang = farmer.preferredLanguage ?? "english";
+      const location = farmer.district ?? farmer.location ?? "Hyderabad";
 
-      // Get all data (reuse generate logic inline for mutation)
-      const weatherRows = farmer.district
-        ? await db
-            .select()
-            .from(weatherCache)
-            .where(
-              and(
-                eq(weatherCache.district, farmer.district),
-                sql`${weatherCache.expiresAt} > NOW()`,
-                sql`${weatherCache.forecastDays} = 0`
-              )
-            )
-            .orderBy(desc(weatherCache.fetchedAt))
-            .limit(1)
-        : [];
-
-      let priceRows: (typeof marketPrices.$inferSelect)[] = [];
-      if (farmer.primaryCrop) {
-        priceRows = await db
-          .select()
-          .from(marketPrices)
-          .where(
-            and(
-              like(marketPrices.commodity, `%${farmer.primaryCrop}%`),
-              eq(marketPrices.isActive, true)
-            )
-          )
-          .orderBy(desc(marketPrices.priceDate))
-          .limit(3);
-      }
-      if (priceRows.length === 0 && farmer.state) {
-        priceRows = await db
-          .select()
-          .from(marketPrices)
-          .where(
-            and(
-              like(marketPrices.state, `%${farmer.state}%`),
-              eq(marketPrices.isActive, true)
-            )
-          )
-          .orderBy(desc(marketPrices.priceDate))
-          .limit(3);
-      }
-      if (priceRows.length === 0) {
-        priceRows = await db
-          .select()
-          .from(marketPrices)
-          .where(eq(marketPrices.isActive, true))
-          .orderBy(desc(marketPrices.priceDate))
-          .limit(3);
-      }
-
-      const schemeRows = await db
-        .select()
-        .from(governmentSchemes)
-        .where(
-          and(
-            farmer.state
-              ? sql`(${governmentSchemes.stateSpecific} IS NULL OR ${governmentSchemes.stateSpecific} LIKE ${`%${farmer.state}%`})`
-              : sql`1=1`,
-            eq(governmentSchemes.isActive, true)
-          )
-        )
-        .orderBy(desc(governmentSchemes.createdAt))
-        .limit(3);
-
-      let tipRow: (typeof cropKnowledge.$inferSelect) | null = null;
-      if (farmer.primaryCrop) {
-        const tips = await db
-          .select()
-          .from(cropKnowledge)
-          .where(
-            and(
-              like(cropKnowledge.cropName, `%${farmer.primaryCrop}%`),
-              eq(cropKnowledge.isActive, true)
-            )
-          )
-          .orderBy(desc(cropKnowledge.viewCount))
-          .limit(1);
-        tipRow = tips[0] ?? null;
-      }
-
-      const briefingData: BriefingData = {
-        weather: weatherRows[0] ?? null,
-        marketPrices: priceRows,
-        schemes: schemeRows,
-        cropTip: tipRow,
-      };
+      // Pull ALL data from external sources
+      const weather = await fetchWeather(location);
+      const marketPrices = await fetchMarketPrices(
+        farmer.primaryCrop ?? undefined,
+        farmer.state ?? undefined
+      );
+      const schemes = fetchSchemes(farmer.state ?? undefined, 3);
+      const cropTip = generateCropAdvice(farmer.primaryCrop ?? "", farmer.district ?? undefined, undefined, lang);
 
       const message = generateCardMessage(
         farmer as FarmerProfile,
-        briefingData,
+        { weather, marketPrices, schemes, cropTip },
         lang
       );
 
-      // Create the briefing record
+      // Record the briefing
       const now = new Date();
-      const scheduledAt = new Date(now);
-      scheduledAt.setHours(8, 0, 0, 0);
-      if (scheduledAt < now) scheduledAt.setDate(scheduledAt.getDate() + 1);
-
       const result = await db.insert(dailyBriefings).values({
         farmerId: input.farmerId,
-        scheduledAt,
+        scheduledAt: now,
         sentAt: now,
         status: "sent",
         language: lang as "telugu" | "hindi" | "english",
-        weatherIncluded: !!briefingData.weather,
-        marketPricesIncluded: priceRows.length > 0,
-        schemesIncluded: schemeRows.length > 0,
-        cropTipIncluded: !!tipRow,
+        weatherIncluded: !!weather,
+        marketPricesIncluded: marketPrices.length > 0,
+        schemesIncluded: schemes.length > 0,
+        cropTipIncluded: !!cropTip,
         personalizationUsed: !!(farmer.primaryCrop || farmer.district || farmer.state),
         generatedMessage: message,
-        weatherData: briefingData.weather
-          ? JSON.stringify({
-              temperature: briefingData.weather.temperature,
-              humidity: briefingData.weather.humidity,
-              condition: briefingData.weather.weatherCondition,
-            })
+        weatherData: weather
+          ? JSON.stringify({ temperature: weather.temperature, humidity: weather.humidity, condition: weather.weatherCondition })
           : null,
-        marketData: priceRows.length > 0 ? JSON.stringify(priceRows.map((p) => ({
-          commodity: p.commodity,
-          price: p.pricePerQuintal,
-          mandi: p.mandiName,
-        }))) : null,
-        schemesReferenced: schemeRows.length > 0 ? JSON.stringify(schemeRows.map((s) => s.id)) : null,
-        cropTipData: tipRow
-          ? JSON.stringify({ title: tipRow.title, crop: tipRow.cropName })
-          : null,
+        marketData: marketPrices.length > 0 ? JSON.stringify(marketPrices.slice(0, 3)) : null,
+        schemesReferenced: schemes.length > 0 ? JSON.stringify(schemes.map((s) => s.title)) : null,
+        cropTipData: cropTip ? JSON.stringify({ title: cropTip.title, crop: farmer.primaryCrop }) : null,
       });
 
       return {
         briefingId: Number(result[0].insertId),
-        farmer: {
-          id: farmer.id,
-          name: farmer.name,
-          phoneNumber: farmer.phoneNumber,
-          language: lang,
-        },
+        farmer: { id: farmer.id, name: farmer.name, phoneNumber: farmer.phoneNumber, language: lang },
         message,
         sentAt: now,
         status: "sent",
       };
     }),
 
-  // Send to ALL active farmers (bulk broadcast)
+  // Broadcast to ALL active farmers
   sendToAll: publicQuery.mutation(async () => {
     const db = getDb();
-
-    const allFarmers = await db
-      .select()
-      .from(farmers)
-      .where(eq(farmers.isActive, true));
-
+    const allFarmers = await db.select().from(farmers).where(eq(farmers.isActive, true));
     const results = [];
+
     for (const farmer of allFarmers) {
       try {
-        // Call the send mutation logic inline
         const lang = farmer.preferredLanguage ?? "english";
-        const weatherRows = farmer.district
-          ? await db
-              .select()
-              .from(weatherCache)
-              .where(
-                and(
-                  eq(weatherCache.district, farmer.district),
-                  sql`${weatherCache.expiresAt} > NOW()`,
-                  sql`${weatherCache.forecastDays} = 0`
-                )
-              )
-              .orderBy(desc(weatherCache.fetchedAt))
-              .limit(1)
-          : [];
+        const location = farmer.district ?? farmer.location ?? "Hyderabad";
 
-        let priceRows: (typeof marketPrices.$inferSelect)[] = [];
-        if (farmer.primaryCrop) {
-          priceRows = await db
-            .select()
-            .from(marketPrices)
-            .where(
-              and(
-                like(marketPrices.commodity, `%${farmer.primaryCrop}%`),
-                eq(marketPrices.isActive, true)
-              )
-            )
-            .orderBy(desc(marketPrices.priceDate))
-            .limit(3);
-        }
-        if (priceRows.length === 0 && farmer.state) {
-          priceRows = await db
-            .select()
-            .from(marketPrices)
-            .where(
-              and(
-                like(marketPrices.state, `%${farmer.state}%`),
-                eq(marketPrices.isActive, true)
-              )
-            )
-            .orderBy(desc(marketPrices.priceDate))
-            .limit(3);
-        }
-        if (priceRows.length === 0) {
-          priceRows = await db
-            .select()
-            .from(marketPrices)
-            .where(eq(marketPrices.isActive, true))
-            .orderBy(desc(marketPrices.priceDate))
-            .limit(3);
-        }
-
-        const schemeRows = await db
-          .select()
-          .from(governmentSchemes)
-          .where(
-            and(
-              farmer.state
-                ? sql`(${governmentSchemes.stateSpecific} IS NULL OR ${governmentSchemes.stateSpecific} LIKE ${`%${farmer.state}%`})`
-                : sql`1=1`,
-              eq(governmentSchemes.isActive, true)
-            )
-          )
-          .orderBy(desc(governmentSchemes.createdAt))
-          .limit(3);
-
-        let tipRow: (typeof cropKnowledge.$inferSelect) | null = null;
-        if (farmer.primaryCrop) {
-          const tips = await db
-            .select()
-            .from(cropKnowledge)
-            .where(
-              and(
-                like(cropKnowledge.cropName, `%${farmer.primaryCrop}%`),
-                eq(cropKnowledge.isActive, true)
-              )
-            )
-            .orderBy(desc(cropKnowledge.viewCount))
-            .limit(1);
-          tipRow = tips[0] ?? null;
-        }
-
-        const briefingData: BriefingData = {
-          weather: weatherRows[0] ?? null,
-          marketPrices: priceRows,
-          schemes: schemeRows,
-          cropTip: tipRow,
-        };
+        // Auto-pull all external data
+        const weather = await fetchWeather(location);
+        const marketPrices = await fetchMarketPrices(farmer.primaryCrop ?? undefined, farmer.state ?? undefined);
+        const schemes = fetchSchemes(farmer.state ?? undefined, 3);
+        const cropTip = generateCropAdvice(farmer.primaryCrop ?? "", farmer.district ?? undefined, undefined, lang);
 
         const message = generateCardMessage(
           farmer as FarmerProfile,
-          briefingData,
+          { weather, marketPrices, schemes, cropTip },
           lang
         );
 
@@ -664,48 +428,31 @@ export const briefingsRouter = createRouter({
           sentAt: now,
           status: "sent",
           language: lang as "telugu" | "hindi" | "english",
-          weatherIncluded: !!briefingData.weather,
-          marketPricesIncluded: priceRows.length > 0,
-          schemesIncluded: schemeRows.length > 0,
-          cropTipIncluded: !!tipRow,
+          weatherIncluded: !!weather,
+          marketPricesIncluded: marketPrices.length > 0,
+          schemesIncluded: schemes.length > 0,
+          cropTipIncluded: !!cropTip,
           personalizationUsed: !!(farmer.primaryCrop || farmer.district || farmer.state),
           generatedMessage: message,
         });
 
-        results.push({
-          farmerId: farmer.id,
-          briefingId: Number(result[0].insertId),
-          name: farmer.name,
-          status: "sent",
-        });
+        results.push({ farmerId: farmer.id, briefingId: Number(result[0].insertId), name: farmer.name, status: "sent" });
       } catch (err: any) {
-        results.push({
-          farmerId: farmer.id,
-          name: farmer.name,
-          status: "failed",
-          error: err.message,
-        });
+        results.push({ farmerId: farmer.id, name: farmer.name, status: "failed", error: err.message });
       }
     }
 
-    const sent = results.filter((r) => r.status === "sent").length;
-    const failed = results.filter((r) => r.status === "failed").length;
-
-    return { total: results.length, sent, failed, results };
+    return {
+      total: results.length,
+      sent: results.filter((r) => r.status === "sent").length,
+      failed: results.filter((r) => r.status === "failed").length,
+      results,
+    };
   }),
 
   // List briefing history
   list: publicQuery
-    .input(
-      z
-        .object({
-          farmerId: z.number().optional(),
-          status: z.enum(["pending", "sent", "failed", "skipped"]).optional(),
-          page: z.number().min(1).default(1),
-          limit: z.number().min(1).max(100).default(20),
-        })
-        .optional()
-    )
+    .input(z.object({ farmerId: z.number().optional(), status: z.enum(["pending", "sent", "failed", "skipped"]).optional(), page: z.number().min(1).default(1), limit: z.number().min(1).max(100).default(20) }).optional())
     .query(async ({ input }) => {
       const db = getDb();
       const { farmerId, status, page = 1, limit = 20 } = input ?? {};
@@ -713,40 +460,30 @@ export const briefingsRouter = createRouter({
       const conditions = [];
       if (farmerId) conditions.push(eq(dailyBriefings.farmerId, farmerId));
       if (status) conditions.push(eq(dailyBriefings.status, status));
-
-      const where = conditions.length > 0 ? and(...conditions) : undefined;
+      const where = conditions.length > 0 ? sql.join(conditions, sql` AND `) : undefined;
 
       const [items, totalResult] = await Promise.all([
-        db
-          .select({
-            id: dailyBriefings.id,
-            farmerId: dailyBriefings.farmerId,
-            status: dailyBriefings.status,
-            language: dailyBriefings.language,
-            personalizationUsed: dailyBriefings.personalizationUsed,
-            generatedMessage: dailyBriefings.generatedMessage,
-            sentAt: dailyBriefings.sentAt,
-            scheduledAt: dailyBriefings.scheduledAt,
-            createdAt: dailyBriefings.createdAt,
-            farmerName: farmers.name,
-            farmerPhone: farmers.phoneNumber,
-          })
-          .from(dailyBriefings)
-          .leftJoin(farmers, eq(dailyBriefings.farmerId, farmers.id))
-          .where(where)
-          .orderBy(desc(dailyBriefings.createdAt))
-          .limit(limit)
-          .offset((page - 1) * limit),
+        db.select({
+          id: dailyBriefings.id,
+          farmerId: dailyBriefings.farmerId,
+          status: dailyBriefings.status,
+          language: dailyBriefings.language,
+          personalizationUsed: dailyBriefings.personalizationUsed,
+          weatherIncluded: dailyBriefings.weatherIncluded,
+          marketPricesIncluded: dailyBriefings.marketPricesIncluded,
+          schemesIncluded: dailyBriefings.schemesIncluded,
+          cropTipIncluded: dailyBriefings.cropTipIncluded,
+          generatedMessage: dailyBriefings.generatedMessage,
+          sentAt: dailyBriefings.sentAt,
+          scheduledAt: dailyBriefings.scheduledAt,
+          createdAt: dailyBriefings.createdAt,
+          farmerName: farmers.name,
+          farmerPhone: farmers.phoneNumber,
+        }).from(dailyBriefings).leftJoin(farmers, eq(dailyBriefings.farmerId, farmers.id)).where(where).orderBy(desc(dailyBriefings.createdAt)).limit(limit).offset((page - 1) * limit),
         db.select({ count: count() }).from(dailyBriefings).where(where),
       ]);
 
-      return {
-        items,
-        total: totalResult[0]?.count ?? 0,
-        page,
-        limit,
-        totalPages: Math.ceil((totalResult[0]?.count ?? 0) / limit),
-      };
+      return { items, total: totalResult[0]?.count ?? 0, page, limit, totalPages: Math.ceil((totalResult[0]?.count ?? 0) / limit) };
     }),
 
   // Stats
@@ -754,23 +491,14 @@ export const briefingsRouter = createRouter({
     const db = getDb();
     const [totalResult, todayResult, statusBreakdown] = await Promise.all([
       db.select({ count: count() }).from(dailyBriefings),
-      db
-        .select({ count: count() })
-        .from(dailyBriefings)
-        .where(sql`${dailyBriefings.createdAt} >= CURDATE()`),
-      db
-        .select({
-          status: dailyBriefings.status,
-          count: count(),
-        })
-        .from(dailyBriefings)
-        .groupBy(dailyBriefings.status),
+      db.select({ count: count() }).from(dailyBriefings).where(sql`${dailyBriefings.createdAt} >= CURDATE()`),
+      db.select({ status: dailyBriefings.status, count: count() }).from(dailyBriefings).groupBy(dailyBriefings.status),
     ]);
+    return { total: totalResult[0]?.count ?? 0, today: todayResult[0]?.count ?? 0, byStatus: statusBreakdown };
+  }),
 
-    return {
-      total: totalResult[0]?.count ?? 0,
-      today: todayResult[0]?.count ?? 0,
-      byStatus: statusBreakdown,
-    };
+  // Check external data source status
+  dataSources: publicQuery.query(async () => {
+    return checkDataSources();
   }),
 });
