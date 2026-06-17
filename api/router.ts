@@ -11,7 +11,6 @@ import { analyticsRouter } from "./analytics-router";
 import { aiIntentsRouter } from "./ai-intents-router";
 import { settingsRouter } from "./settings-router";
 import { whatsappRouter } from "./whatsapp-router";
-import { briefingsRouter } from "./briefings-router";
 
 export const appRouter = createRouter({
   ping: publicQuery.query(() => ({ ok: true, ts: Date.now() })),
@@ -27,7 +26,6 @@ export const appRouter = createRouter({
   aiIntents: aiIntentsRouter,
   settings: settingsRouter,
   whatsapp: whatsappRouter,
-  briefings: briefingsRouter,
 });
 
 export type AppRouter = typeof appRouter;

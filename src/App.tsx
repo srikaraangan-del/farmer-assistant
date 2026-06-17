@@ -11,7 +11,6 @@ import Schemes from "./pages/Schemes";
 import Weather from "./pages/Weather";
 import CropKnowledge from "./pages/CropKnowledge";
 import AiIntents from "./pages/AiIntents";
-import DailyBriefings from "./pages/DailyBriefings";
 import Settings from "./pages/Settings";
 
 export default function App() {
@@ -87,14 +86,6 @@ export default function App() {
         element={
           <AuthLayout>
             <AiIntents />
-          </AuthLayout>
-        }
-      />
-      <Route
-        path="/briefings"
-        element={
-          <AuthLayout>
-            <DailyBriefings />
           </AuthLayout>
         }
       />

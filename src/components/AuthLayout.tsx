@@ -34,7 +34,6 @@ import {
   BrainCircuit,
   Settings,
   Phone,
-  Newspaper,
 } from "lucide-react";
 import { type CSSProperties, type ReactNode, useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
@@ -46,7 +45,6 @@ const menuItems = [
   { icon: Users, label: "Farmers", path: "/farmers" },
   { icon: MessageSquare, label: "Conversations", path: "/conversations" },
   { icon: Phone, label: "WhatsApp Simulator", path: "/whatsapp" },
-  { icon: Newspaper, label: "Daily Briefings", path: "/briefings" },
   { icon: TrendingUp, label: "Market Prices", path: "/market-prices" },
   { icon: Landmark, label: "Govt Schemes", path: "/schemes" },
   { icon: CloudSun, label: "Weather", path: "/weather" },
