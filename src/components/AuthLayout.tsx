@@ -19,7 +19,6 @@ import {
   SidebarTrigger,
   useSidebar,
 } from "@/components/ui/sidebar";
-import { LOGIN_PATH } from "@/const";
 import { useIsMobile } from "@/hooks/use-mobile";
 import {
   LayoutDashboard,
@@ -34,17 +33,18 @@ import {
   BrainCircuit,
   Settings,
   Phone,
+  Newspaper,
 } from "lucide-react";
 import { type CSSProperties, type ReactNode, useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { AuthLayoutSkeleton } from "./AuthLayoutSkeleton";
-import { Button } from "./ui/button";
 
 const menuItems = [
   { icon: LayoutDashboard, label: "Dashboard", path: "/" },
   { icon: Users, label: "Farmers", path: "/farmers" },
   { icon: MessageSquare, label: "Conversations", path: "/conversations" },
   { icon: Phone, label: "WhatsApp Simulator", path: "/whatsapp" },
+  { icon: Newspaper, label: "Daily Briefings", path: "/briefings" },
   { icon: TrendingUp, label: "Market Prices", path: "/market-prices" },
   { icon: Landmark, label: "Govt Schemes", path: "/schemes" },
   { icon: CloudSun, label: "Weather", path: "/weather" },
@@ -78,35 +78,9 @@ export default function AuthLayout({
   }
 
   if (!user) {
-    return (
-      <div className="flex items-center justify-center min-h-screen">
-        <div className="flex flex-col items-center gap-8 p-8 max-w-md w-full">
-          <div className="flex flex-col items-center gap-6">
-            <div className="flex items-center gap-3">
-              <div className="h-10 w-10 bg-primary rounded-lg flex items-center justify-center">
-                <Sprout className="h-6 w-6 text-primary-foreground" />
-              </div>
-              <h1 className="text-2xl font-semibold tracking-tight">
-                AI Farmer Assistant
-              </h1>
-            </div>
-            <p className="text-sm text-muted-foreground text-center max-w-sm">
-              Admin dashboard for managing your AI-powered WhatsApp farmer assistant.
-              Sign in to access the dashboard.
-            </p>
-          </div>
-          <Button
-            onClick={() => {
-              window.location.href = LOGIN_PATH;
-            }}
-            size="lg"
-            className="w-full shadow-lg hover:shadow-xl transition-all"
-          >
-            Sign in
-          </Button>
-        </div>
-      </div>
-    );
+    // Auto-redirect to login page
+    window.location.href = "/login";
+    return <AuthLayoutSkeleton />;
   }
 
   return (

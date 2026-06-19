@@ -1,58 +1,75 @@
 import { trpc } from "@/providers/trpc";
-import { useCallback, useEffect, useMemo } from "react";
-import { useNavigate } from "react-router";
-import { LOGIN_PATH } from "@/const";
+import { useCallback, useMemo } from "react";
 
-type UseAuthOptions = {
-  redirectOnUnauthenticated?: boolean;
-  redirectPath?: string;
-};
-
-export function useAuth(options?: UseAuthOptions) {
-  const { redirectOnUnauthenticated = false, redirectPath = LOGIN_PATH } =
-    options ?? {};
-
-  const navigate = useNavigate();
-
+export function useAuth() {
   const utils = trpc.useUtils();
 
+  // Check local auth first
   const {
-    data: user,
-    isLoading,
-    error,
-    refetch,
+    data: localUser,
+    isLoading: localLoading,
+  } = trpc.localAuth.me.useQuery(undefined, {
+    staleTime: 1000 * 60 * 5,
+    retry: false,
+  });
+
+  // Check Kimi OAuth as fallback
+  const {
+    data: oauthUser,
+    isLoading: oauthLoading,
   } = trpc.auth.me.useQuery(undefined, {
     staleTime: 1000 * 60 * 5,
     retry: false,
+    enabled: !localUser, // Only check OAuth if no local user
   });
 
   const logoutMutation = trpc.auth.logout.useMutation({
     onSuccess: async () => {
       await utils.invalidate();
-      navigate(redirectPath);
     },
   });
 
-  const logout = useCallback(() => logoutMutation.mutate(), [logoutMutation]);
-
-  useEffect(() => {
-    if (redirectOnUnauthenticated && !isLoading && !user) {
-      const currentPath = window.location.pathname;
-      if (currentPath !== redirectPath) {
-        navigate(redirectPath);
-      }
+  // Normalize user object - works with both auth systems
+  const user = useMemo(() => {
+    if (localUser) {
+      return {
+        id: localUser.id,
+        name: localUser.name ?? localUser.username,
+        email: null,
+        avatar: null,
+        role: localUser.role,
+        unionId: `local_${localUser.id}`,
+      };
     }
-  }, [redirectOnUnauthenticated, isLoading, user, navigate, redirectPath]);
+    if (oauthUser) {
+      return oauthUser;
+    }
+    return null;
+  }, [localUser, oauthUser]);
+
+  const isLoading = localLoading || (!localUser && oauthLoading);
+
+  const logout = useCallback(() => {
+    // Always clear local auth token
+    localStorage.removeItem("local_auth_token");
+    // Always call OAuth logout too (safe no-op if not using OAuth)
+    logoutMutation.mutate(undefined, {
+      onSettled: () => {
+        // Refresh the page to clear all auth state
+        window.location.reload();
+      },
+    });
+  }, [logoutMutation]);
 
   return useMemo(
     () => ({
-      user: user ?? null,
+      user,
       isAuthenticated: !!user,
-      isLoading: isLoading || logoutMutation.isPending,
-      error,
+      isAdmin: user?.role === "admin",
+      isLoading,
       logout,
-      refresh: refetch,
+      refresh: () => utils.invalidate(),
     }),
-    [user, isLoading, logoutMutation.isPending, error, logout, refetch],
+    [user, isLoading, logout, utils],
   );
 }

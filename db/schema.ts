@@ -34,6 +34,21 @@ export const users = mysqlTable("users", {
 export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
 
+// Local users (username/password for admin dashboard)
+export const localUsers = mysqlTable("local_users", {
+  id: serial("id").primaryKey(),
+  username: varchar("username", { length: 255 }).notNull().unique(),
+  passwordHash: varchar("password_hash", { length: 255 }).notNull(),
+  displayName: varchar("display_name", { length: 255 }),
+  role: mysqlEnum("role", ["user", "admin"]).default("admin").notNull(),
+  isActive: boolean("is_active").default(true).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull().$onUpdate(() => new Date()),
+});
+
+export type LocalUser = typeof localUsers.$inferSelect;
+export type InsertLocalUser = typeof localUsers.$inferInsert;
+
 // Farmers (WhatsApp users)
 export const farmers = mysqlTable(
   "farmers",
@@ -400,3 +415,43 @@ export const systemSettings = mysqlTable("system_settings", {
 
 export type SystemSetting = typeof systemSettings.$inferSelect;
 export type InsertSystemSetting = typeof systemSettings.$inferInsert;
+
+// ============ DAILY BRIEFINGS ============
+
+export const dailyBriefings = mysqlTable(
+  "daily_briefings",
+  {
+    id: serial("id").primaryKey(),
+    farmerId: bigint("farmer_id", { mode: "number", unsigned: true })
+      .notNull()
+      .references(() => farmers.id),
+    scheduledAt: timestamp("scheduled_at").notNull(),
+    sentAt: timestamp("sent_at"),
+    status: mysqlEnum("status", ["pending", "sent", "failed", "skipped"])
+      .default("pending")
+      .notNull(),
+    language: mysqlEnum("language", ["telugu", "hindi", "english"])
+      .default("english")
+      .notNull(),
+    weatherIncluded: boolean("weather_included").default(true).notNull(),
+    marketPricesIncluded: boolean("market_prices_included").default(true).notNull(),
+    schemesIncluded: boolean("schemes_included").default(true).notNull(),
+    cropTipIncluded: boolean("crop_tip_included").default(true).notNull(),
+    personalizationUsed: boolean("personalization_used").default(false).notNull(),
+    generatedMessage: text("generated_message"),
+    weatherData: json("weather_data"),
+    marketData: json("market_data"),
+    schemesReferenced: json("schemes_referenced"),
+    cropTipData: json("crop_tip_data"),
+    errorMessage: text("error_message"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("briefing_farmer_idx").on(table.farmerId),
+    index("briefing_status_idx").on(table.status),
+    index("briefing_scheduled_idx").on(table.scheduledAt),
+  ]
+);
+
+export type DailyBriefing = typeof dailyBriefings.$inferSelect;
+export type InsertDailyBriefing = typeof dailyBriefings.$inferInsert;

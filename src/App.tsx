@@ -6,6 +6,7 @@ import Dashboard from "./pages/Dashboard";
 import Farmers from "./pages/Farmers";
 import Conversations from "./pages/Conversations";
 import WhatsAppSimulator from "./pages/WhatsAppSimulator";
+import DailyBriefings from "./pages/DailyBriefings";
 import MarketPrices from "./pages/MarketPrices";
 import Schemes from "./pages/Schemes";
 import Weather from "./pages/Weather";
@@ -46,6 +47,14 @@ export default function App() {
         element={
           <AuthLayout>
             <WhatsAppSimulator />
+          </AuthLayout>
+        }
+      />
+      <Route
+        path="/briefings"
+        element={
+          <AuthLayout>
+            <DailyBriefings />
           </AuthLayout>
         }
       />
