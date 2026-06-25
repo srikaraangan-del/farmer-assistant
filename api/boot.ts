@@ -1,3 +1,4 @@
+import "dotenv/config";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import type { HttpBindings } from "@hono/node-server";
@@ -20,6 +21,8 @@ app.get(Paths.oauthCallback, createOAuthCallbackHandler());
 // WhatsApp sends raw HTTP requests (NOT tRPC), so we need a Hono route
 
 const VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN ?? "farmer_verify_123";
+const WHATSAPP_TOKEN = process.env.WHATSAPP_ACCESS_TOKEN ?? "";
+const WHATSAPP_PHONE_ID = process.env.WHATSAPP_PHONE_NUMBER_ID ?? "";
 
 // 1. Verification endpoint (GET) — Facebook calls this to verify the webhook
 app.get("/api/webhook/whatsapp", async (c) => {
@@ -131,6 +134,46 @@ async function processIncomingMessage(phoneNumber: string, message: string, cont
   }).where(eq(farmers.id, farmerId));
 
   console.log(`[WhatsApp] Processed message from ${phoneNumber}: intent=${intent}`);
+
+  // 9. Send AI response back to farmer via WhatsApp
+  await sendWhatsAppMessage(phoneNumber, aiResponse);
+}
+
+// Send message back to farmer via WhatsApp Cloud API
+async function sendWhatsAppMessage(toPhoneNumber: string, message: string) {
+  if (!WHATSAPP_TOKEN || !WHATSAPP_PHONE_ID) {
+    console.warn("[WhatsApp] Cannot send message: Missing ACCESS_TOKEN or PHONE_NUMBER_ID in .env");
+    return;
+  }
+
+  try {
+    const url = `https://graph.facebook.com/v18.0/${WHATSAPP_PHONE_ID}/messages`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${WHATSAPP_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        messaging_product: "whatsapp",
+        recipient_type: "individual",
+        to: toPhoneNumber,
+        type: "text",
+        text: { body: message },
+      }),
+    });
+
+    const result = await response.json();
+
+    if (!response.ok) {
+      console.error("[WhatsApp] Failed to send message:", JSON.stringify(result));
+      return;
+    }
+
+    console.log(`[WhatsApp] Message sent to ${toPhoneNumber}: ${message.substring(0, 50)}...`);
+  } catch (err: any) {
+    console.error("[WhatsApp] Error sending message:", err.message);
+  }
 }
 
 function detectIntent(message: string): string {
