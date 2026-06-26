@@ -32,10 +32,20 @@ import {
   ChevronRight,
   Edit,
   Eye,
+  Upload,
+  Download,
+  FileSpreadsheet,
 } from "lucide-react";
 import { Link } from "react-router";
+import * as XLSX from "xlsx";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
-type Language = "telugu" | "hindi" | "english";
+type Language = "telugu" | "hindi" | "kannada" | "english";
 
 export default function Farmers() {
   const [search, setSearch] = useState("");
@@ -85,6 +95,23 @@ export default function Farmers() {
     onSuccess: () => utils.farmers.list.invalidate(),
   });
 
+  const importMutation = trpc.farmers.importBulk.useMutation({
+    onSuccess: (result) => {
+      utils.farmers.list.invalidate();
+      utils.farmers.stats.invalidate();
+      alert(`Import complete! Inserted: ${result.inserted}, Skipped (duplicates): ${result.skipped}`);
+    },
+    onError: (err) => {
+      alert("Import failed: " + err.message);
+    },
+  });
+
+  const { data: allFarmersData } = trpc.farmers.exportAll.useQuery(undefined, {
+    enabled: false,
+  });
+
+  const utilsExport = trpc.useUtils();
+
   const resetForm = () => {
     setForm({
       phoneNumber: "",
@@ -124,6 +151,137 @@ export default function Farmers() {
     }
   };
 
+  // Export farmers to Excel
+  const handleExport = async () => {
+    const data = await utilsExport.farmers.exportAll.fetch();
+    if (!data || data.length === 0) {
+      alert("No farmers to export");
+      return;
+    }
+
+    const exportData = data.map((f) => ({
+      "Phone Number": f.phoneNumber,
+      "Name": f.name ?? "",
+      "Preferred Language": f.preferredLanguage,
+      "Location": f.location ?? "",
+      "District": f.district ?? "",
+      "State": f.state ?? "",
+      "Land Size (acres)": f.landSize ?? "",
+      "Primary Crop": f.primaryCrop ?? "",
+      "Secondary Crops": f.secondaryCrops ?? "",
+      "Active": f.isActive ? "Yes" : "No",
+      "Total Interactions": f.totalInteractions ?? 0,
+      "Created At": f.createdAt ? new Date(f.createdAt).toLocaleDateString() : "",
+    }));
+
+    const ws = XLSX.utils.json_to_sheet(exportData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Farmers");
+    XLSX.writeFile(wb, `farmers_export_${new Date().toISOString().split("T")[0]}.xlsx`);
+  };
+
+  // Download template Excel
+  const handleDownloadTemplate = () => {
+    const templateData = [
+      {
+        "phoneNumber": "919876543210",
+        "name": "Ramesh Kumar",
+        "preferredLanguage": "hindi",
+        "location": "Village Badarpur",
+        "district": "Gurgaon",
+        "state": "Haryana",
+        "landSize": 5,
+        "primaryCrop": "Wheat",
+        "secondaryCrops": "Mustard,Barley",
+      },
+      {
+        "phoneNumber": "919876543211",
+        "name": "Lakshmi Devi",
+        "preferredLanguage": "telugu",
+        "location": "Ramapuram",
+        "district": "Guntur",
+        "state": "Andhra Pradesh",
+        "landSize": 3.5,
+        "primaryCrop": "Rice",
+        "secondaryCrops": "Cotton",
+      },
+      {
+        "phoneNumber": "919876543212",
+        "name": "Rajanna Gowda",
+        "preferredLanguage": "kannada",
+        "location": "Hassan",
+        "district": "Hassan",
+        "state": "Karnataka",
+        "landSize": 10,
+        "primaryCrop": "Coffee",
+        "secondaryCrops": "Pepper,Cardamom",
+      },
+    ];
+
+    const ws = XLSX.utils.json_to_sheet(templateData);
+    const wb = XLSX.utils.book_new();
+
+    // Add instructions sheet
+    const instructions = [
+      { "Field": "phoneNumber", "Required": "Yes", "Format": "With country code (e.g., 919876543210)", "Example": "919876543210" },
+      { "Field": "name", "Required": "No", "Format": "Farmer full name", "Example": "Ramesh Kumar" },
+      { "Field": "preferredLanguage", "Required": "No", "Format": "english, hindi, telugu, or kannada", "Example": "hindi" },
+      { "Field": "location", "Required": "No", "Format": "Village or area name", "Example": "Village Badarpur" },
+      { "Field": "district", "Required": "No", "Format": "District name", "Example": "Gurgaon" },
+      { "Field": "state", "Required": "No", "Format": "State name", "Example": "Haryana" },
+      { "Field": "landSize", "Required": "No", "Format": "Number in acres", "Example": "5" },
+      { "Field": "primaryCrop", "Required": "No", "Format": "Main crop name", "Example": "Wheat" },
+      { "Field": "secondaryCrops", "Required": "No", "Format": "Comma separated", "Example": "Mustard,Barley" },
+    ];
+    const wsInstructions = XLSX.utils.json_to_sheet(instructions);
+    XLSX.utils.book_append_sheet(wb, wsInstructions, "Instructions");
+    XLSX.utils.book_append_sheet(wb, ws, "Data Template");
+
+    XLSX.writeFile(wb, `farmer_import_template.xlsx`);
+  };
+
+  // Import farmers from Excel
+  const handleImport = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const data = new Uint8Array(event.target?.result as ArrayBuffer);
+        const workbook = XLSX.read(data, { type: "array" });
+        const sheetName = workbook.SheetNames.find((n) => n.toLowerCase().includes("data") || n.toLowerCase().includes("template")) || workbook.SheetNames[workbook.SheetNames.length - 1];
+        const sheet = workbook.Sheets[sheetName];
+        const jsonData = XLSX.utils.sheet_to_json(sheet) as Array<Record<string, unknown>>;
+
+        const farmers = jsonData.map((row) => ({
+          phoneNumber: String(row.phoneNumber || row["Phone Number"] || row["phone"] || "").trim(),
+          name: String(row.name || row["Name"] || "").trim() || undefined,
+          preferredLanguage: String(row.preferredLanguage || row["Preferred Language"] || row["preferred_language"] || "english").trim().toLowerCase() as Language,
+          location: String(row.location || row["Location"] || "").trim() || undefined,
+          district: String(row.district || row["District"] || "").trim() || undefined,
+          state: String(row.state || row["State"] || "").trim() || undefined,
+          landSize: row.landSize || row["Land Size (acres)"] || row["landSize"] ? Number(row.landSize || row["Land Size (acres)"] || row["landSize"]) : undefined,
+          primaryCrop: String(row.primaryCrop || row["Primary Crop"] || row["primaryCrop"] || "").trim() || undefined,
+          secondaryCrops: String(row.secondaryCrops || row["Secondary Crops"] || row["secondaryCrops"] || "").trim() || undefined,
+        })).filter((f) => f.phoneNumber && f.phoneNumber.length >= 10);
+
+        if (farmers.length === 0) {
+          alert("No valid farmers found in the file. Please check the template format.");
+          return;
+        }
+
+        if (confirm(`Found ${farmers.length} farmer(s) to import. Proceed?`)) {
+          importMutation.mutate(farmers);
+        }
+      } catch (err: any) {
+        alert("Error reading file: " + err.message);
+      }
+    };
+    reader.readAsArrayBuffer(file);
+    e.target.value = ""; // Reset input
+  };
+
   const openEdit = (farmer: NonNullable<typeof data>["items"][0]) => {
     setEditingId(farmer.id);
     setForm({
@@ -148,13 +306,49 @@ export default function Farmers() {
             Manage registered farmers on WhatsApp
           </p>
         </div>
-        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-          <DialogTrigger asChild>
-            <Button onClick={() => { resetForm(); setEditingId(null); }}>
-              <Plus className="h-4 w-4 mr-2" />
-              Add Farmer
+        <div className="flex gap-2">
+          {/* Import */}
+          <input
+            type="file"
+            id="import-farmers"
+            accept=".xlsx,.xls,.csv"
+            className="hidden"
+            onChange={handleImport}
+          />
+          <label htmlFor="import-farmers" className="cursor-pointer inline-flex">
+            <Button variant="outline" className="cursor-pointer">
+              <Upload className="h-4 w-4 mr-2" />
+              Import
             </Button>
-          </DialogTrigger>
+          </label>
+
+          {/* Export Dropdown */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline">
+                <Download className="h-4 w-4 mr-2" />
+                Export
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={handleExport}>
+                <Download className="h-4 w-4 mr-2" />
+                Export All Farmers (.xlsx)
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={handleDownloadTemplate}>
+                <FileSpreadsheet className="h-4 w-4 mr-2" />
+                Download Template (.xlsx)
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+            <DialogTrigger asChild>
+              <Button onClick={() => { resetForm(); setEditingId(null); }}>
+                <Plus className="h-4 w-4 mr-2" />
+                Add Farmer
+              </Button>
+            </DialogTrigger>
           <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>
@@ -196,6 +390,7 @@ export default function Farmers() {
                     <SelectItem value="english">English</SelectItem>
                     <SelectItem value="hindi">Hindi</SelectItem>
                     <SelectItem value="telugu">Telugu</SelectItem>
+                    <SelectItem value="kannada">Kannada</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -255,6 +450,7 @@ export default function Farmers() {
           </DialogContent>
         </Dialog>
       </div>
+    </div>
 
       {/* Filters */}
       <div className="flex gap-3 flex-wrap">
@@ -282,6 +478,7 @@ export default function Farmers() {
             <SelectItem value="english">English</SelectItem>
             <SelectItem value="hindi">Hindi</SelectItem>
             <SelectItem value="telugu">Telugu</SelectItem>
+            <SelectItem value="kannada">Kannada</SelectItem>
           </SelectContent>
         </Select>
       </div>

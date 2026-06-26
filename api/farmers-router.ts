@@ -158,6 +158,67 @@ export const farmersRouter = createRouter({
       return { success: true };
     }),
 
+  exportAll: publicQuery.query(async () => {
+    const db = getDb();
+    const allFarmers = await db
+      .select()
+      .from(farmers)
+      .orderBy(desc(farmers.createdAt));
+    return allFarmers;
+  }),
+
+  importBulk: adminQuery
+    .input(
+      z.array(
+        z.object({
+          phoneNumber: z.string().min(10).max(20),
+          name: z.string().optional(),
+          preferredLanguage: z.enum(["telugu", "hindi", "kannada", "english"]).default("english"),
+          location: z.string().optional(),
+          district: z.string().optional(),
+          state: z.string().optional(),
+          landSize: z.union([z.number(), z.string()]).optional().transform((v) => v ? Number(v) : undefined),
+          primaryCrop: z.string().optional(),
+          secondaryCrops: z.string().optional(),
+        })
+      )
+    )
+    .mutation(async ({ input }) => {
+      const db = getDb();
+      let inserted = 0;
+      let skipped = 0;
+
+      for (const row of input) {
+        // Skip if phone number already exists
+        const existing = await db
+          .select()
+          .from(farmers)
+          .where(eq(farmers.phoneNumber, row.phoneNumber))
+          .limit(1);
+
+        if (existing.length > 0) {
+          skipped++;
+          continue;
+        }
+
+        await db.insert(farmers).values({
+          phoneNumber: row.phoneNumber,
+          name: row.name || null,
+          preferredLanguage: row.preferredLanguage,
+          location: row.location || null,
+          district: row.district || null,
+          state: row.state || null,
+          landSize: row.landSize || null,
+          primaryCrop: row.primaryCrop || null,
+          secondaryCrops: row.secondaryCrops || null,
+          isActive: true,
+        });
+        inserted++;
+      }
+
+      return { inserted, skipped };
+    }),
+
   stats: publicQuery.query(async () => {
     const db = getDb();
     const [totalResult, activeResult, todayResult, languageResult] =
