@@ -179,11 +179,11 @@ async function sendWhatsAppMessage(toPhoneNumber: string, message: string) {
 function detectIntent(message: string): string {
   const lower = message.toLowerCase();
   const intents = [
-    { keywords: ["weather", "rain", "temperature", "barish", "mausam", "vaana"], intent: "weather" },
-    { keywords: ["price", "rate", "mandi", "bazar", "dhara", "dar"], intent: "market_price" },
-    { keywords: ["scheme", "subsidy", "loan", "yojana", "pension"], intent: "scheme" },
-    { keywords: ["fertilizer", "pest", "disease", "crop", "panta"], intent: "crop_advice" },
-    { keywords: ["hello", "hi", "namaste", "namaskaram"], intent: "greeting" },
+    { keywords: ["weather", "rain", "temperature", "barish", "mausam", "vaana", "haṅgāmu", "maḷe"], intent: "weather" },
+    { keywords: ["price", "rate", "mandi", "bazar", "dhara", "dar", "bele", "belli", "dharaṇi"], intent: "market_price" },
+    { keywords: ["scheme", "subsidy", "loan", "yojana", "pension", "yojane", "salle", "vṛtti"], intent: "scheme" },
+    { keywords: ["fertilizer", "pest", "disease", "crop", "panta", "gobbara", "kīṭa", "roga", "balé"], intent: "crop_advice" },
+    { keywords: ["hello", "hi", "namaste", "namaskaram", "namaskāra"], intent: "greeting" },
     { keywords: ["voice", "audio", "speak"], intent: "voice_request" },
   ];
   for (const item of intents) {
@@ -198,35 +198,41 @@ function generateAIResponse(intent: string, lang: string): string {
       english: "Here's the weather forecast for your area:\n\nToday: 32C, Humidity 65%, Rain probability 20%\nTomorrow: 30C, Rain probability 45%\n\nLight rain expected tomorrow afternoon. Good conditions for field work today.",
       hindi: "Aapke kshetra ke mausam ki jaankari:\n\nAaj: 32C, Nami 65%, Barish ki sambhavna 20%\nKal: 30C, Barish ki sambhavna 45%\n\nKal dopahar mein halki barish ki ashanka hai.",
       telugu: "Me priantam vaataavaran samacharam:\n\nEroju: 32C, Tegovata 65%, Varsham avakasam 20%\nRepu: 30C, Varsham avakasam 45%\n\nRepu madhyanam jalla vana sambhavam undi.",
+      kannada: "Nimma pradeshada havamanavannu tilisuttane:\n\nIvattu: 32C, Ardhrate 65%, Malé sambhavane 20%\nNale: 30C, Malé sambhavane 45%\n\nNale madhyahna halke malé y sambhavane ide. Ivattu kelsakke olleya sithi.",
     },
     market_price: {
       english: "Current market prices:\n\nRice: INR 2,150/quintal\nWheat: INR 2,450/quintal\nCotton: INR 6,800/quintal\n\nPrices are trending upward this week. Good time to sell.",
       hindi: "Vartaman bazar bhav:\n\nChawal: INR 2,150/quintal\nGehun: INR 2,450/quintal\nKapas: INR 6,800/quintal\n\nIs hafte bhav badhte hue hain. Bechne ka achha samay hai.",
       telugu: "Praastuta marketu dharalu:\n\nBiyyam: INR 2,150/quintal\nGodhumalu: INR 2,450/quintal\nPathi: INR 6,800/quintal\n\nEe vaaram dharalu penchu vaduna unnaay.",
+      kannada: "Vartamana bajara bele:\n\nAkki: INR 2,150/quintal\nGodhi: INR 2,450/quintal\nHatti: INR 6,800/quintal\n\nIvaara bele erelu mele kade ide. Mārāṭake olleya samaya.",
     },
     scheme: {
       english: "Available government schemes:\n\n1. PM-KISAN: Rs 6,000/year income support\n2. Soil Health Card: Free soil testing\n3. Kisan Credit Card: Low-interest loans at 4%\n4. PMFBY: Crop insurance with 50% subsidy\n\nReply with scheme name for more details.",
       hindi: "Sarkari yojnaayein:\n\n1. PM-KISAN: Rs 6,000/saal aay sahaayta\n2. Soil Health Card: Muft mitti jaanch\n3. Kisan Credit Card: 4% par kam byaaj loan\n4. PMFBY: Fasal bima 50% subsidy ke saath\n\nAur jaankari ke liye yojna ka naam bhejein.",
       telugu: "Praabhutva paddhatulu:\n\n1. PM-KISAN: Rs 6,000/samvatsaram aadaya madad\n2. Soil Health Card: Uchita mruttika pariksha\n3. Kisan Credit Card: 4% takku veyyi runam\n4. PMFBY: 50% subsidy tho panta beema\n\nEkkuva vivaraalaku paddhati peru reply ivvandi.",
+      kannada: "Prastuta sarkari yojanegalu:\n\n1. PM-KISAN: Varshake Rs 6,000 aaya samarthane\n2. Soil Health Card: Uchita mannina parikshe\n3. Kisan Credit Card: 4% kam byaada salle\n4. PMFBY: 50% subsidy jotege baale beeme\n\nHecchu mahitige yojaneya hesaru reply kodi.",
     },
     crop_advice: {
       english: "For your crop, here are the recommendations:\n\nFertilizer: Apply NPK 20-20-20 at 50kg/acre\nPest Control: Monitor for stem borer. Use neem-based spray if needed.\nIrrigation: Water every 7-10 days depending on soil moisture.\n\nWould you like advice on a specific crop stage?",
       hindi: "Aapki fasal ke liye salah:\n\nKhud: NPK 20-20-20, 50kg/acre lagayein\nKeet niyantran: Stem borer ki nigraani rakhein. Neem spray istemal karein.\nSinchai: 7-10 din mein paani den.\n\nKisi vishesh avastha ki jaankari chahiye?",
       telugu: "Me panta ku sifarsula:\n\nYeruvu: NPK 20-20-20, 50kg/acre vadesi\nPuru niyantranam: Stem borer ku sikan chesi.\nNiti purugu: 7-10 rojula ku niti ivvandi.\n\nKoni visista dasa gurinchi salaha kavala?",
+      kannada: "Nimma balige sifarish:\n\nGobbara: NPK 20-20-20, 50kg/ekre haki\nKīṭa niyamtrana: Stem borer gāgale. Bevaru aḍhāre spray.\nNeerāvaraṇa: 7-10 dinakke oṃdu sāri nīru haki.\n\nViśeṣa belēyada kāla gāgi sūkṣma salāhe bēkā?",
     },
     greeting: {
       english: "Hello! Welcome to AI Farmer Assistant.\n\nI can help you with:\n- Weather updates\n- Market prices\n- Government schemes\n- Farming advice\n\nWhat would you like to know?",
       hindi: "Namaste! AI Farmer Assistant mein aapka swagat hai.\n\nMain aapki madad kar sakta hoon:\n- Mausam ki jaankari\n- Bazar bhav\n- Sarkari yojnaayein\n- Kheti salah\n\nAap kya jaanna chahte hain?",
       telugu: "Namaskaram! AI Farmer Assistant ku swagatam.\n\nNenu meeku sahayam cheyagalan vishayaalu:\n- Vataavaran paridi\n- Marketu dharalu\n- Praabhutva paddhatulu\n- Vyavasaaya salaha\n\nMeeku emi telusukovalani undi?",
+      kannada: "Namaskara! AI Farmer Assistant ge svāgata.\n\nNānu nimge sahāya māḍabahudāgiruvudu:\n- Havamāna māhiti\n- Bajāra bele\n- Sarkāri yojanegalu\n- Kr̥ṣi salāhe\n\nNīvu yāvu māhitiya beko?",
     },
     general: {
       english: "I understand. I'm here to help farmers with weather, market prices, government schemes, and farming advice.\n\nWhat specific information do you need?",
       hindi: "Main samajh gaya. Main kisaanon ki madad ke liye yahan hoon.\n\nAapko kis vishesh jaankari ki zaroorat hai?",
       telugu: "Ardamaindi. Nenu rytulaku sahayam cheyadaniki vunnaanu.\n\nMeeku emi visista samacharam kavali?",
+      kannada: "Nanage artha vāyitu. Raitarigé havamāna, bajāra bele, sarkāri yojané, mattu kr̥ṣi salāhe kottalu nānu illi iddéne.\n\nNimagé yāvu viśēṣa māhiti bēku?",
     },
   };
 
-  const langMap: Record<string, string> = { telugu: "telugu", hindi: "hindi", english: "english" };
+  const langMap: Record<string, string> = { telugu: "telugu", hindi: "hindi", kannada: "kannada", english: "english" };
   const responsesForIntent = responses[intent] ?? responses.general;
   return responsesForIntent[langMap[lang] ?? "english"] ?? responsesForIntent.english;
 }

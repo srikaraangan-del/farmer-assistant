@@ -59,6 +59,7 @@ export const farmers = mysqlTable(
     preferredLanguage: mysqlEnum("preferred_language", [
       "telugu",
       "hindi",
+      "kannada",
       "english",
     ])
       .default("english")
