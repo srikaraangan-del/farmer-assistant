@@ -37,7 +37,6 @@ import {
   FileSpreadsheet,
 } from "lucide-react";
 import { Link } from "react-router";
-import * as XLSX from "xlsx";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -151,7 +150,37 @@ export default function Farmers() {
     }
   };
 
-  // Export farmers to Excel
+  // CSV helpers
+  const downloadCSV = (filename: string, headers: string[], rows: string[][]) => {
+    const csvContent = [headers.join(","), ...rows.map((r) => r.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(","))].join("\n");
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const parseCSV = (text: string): Array<Record<string, string>> => {
+    const lines = text.trim().split("\n").filter((l) => l.trim());
+    if (lines.length < 2) return [];
+    const headers = lines[0].split(",").map((h) => h.replace(/^"|"$/g, "").trim());
+    const result: Array<Record<string, string>> = [];
+    for (let i = 1; i < lines.length; i++) {
+      const values = lines[i].split(",").map((v) => v.replace(/^"|"$/g, "").trim());
+      const row: Record<string, string> = {};
+      headers.forEach((h, idx) => {
+        row[h] = values[idx] ?? "";
+      });
+      result.push(row);
+    }
+    return result;
+  };
+
+  // Export farmers to CSV
   const handleExport = async () => {
     const data = await utilsExport.farmers.exportAll.fetch();
     if (!data || data.length === 0) {
@@ -159,88 +188,36 @@ export default function Farmers() {
       return;
     }
 
-    const exportData = data.map((f) => ({
-      "Phone Number": f.phoneNumber,
-      "Name": f.name ?? "",
-      "Preferred Language": f.preferredLanguage,
-      "Location": f.location ?? "",
-      "District": f.district ?? "",
-      "State": f.state ?? "",
-      "Land Size (acres)": f.landSize ?? "",
-      "Primary Crop": f.primaryCrop ?? "",
-      "Secondary Crops": f.secondaryCrops ?? "",
-      "Active": f.isActive ? "Yes" : "No",
-      "Total Interactions": f.totalInteractions ?? 0,
-      "Created At": f.createdAt ? new Date(f.createdAt).toLocaleDateString() : "",
-    }));
-
-    const ws = XLSX.utils.json_to_sheet(exportData);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Farmers");
-    XLSX.writeFile(wb, `farmers_export_${new Date().toISOString().split("T")[0]}.xlsx`);
+    const headers = ["phoneNumber", "name", "preferredLanguage", "location", "district", "state", "landSize", "primaryCrop", "secondaryCrops", "isActive", "totalInteractions", "createdAt"];
+    const rows = data.map((f) => [
+      f.phoneNumber,
+      f.name ?? "",
+      f.preferredLanguage,
+      f.location ?? "",
+      f.district ?? "",
+      f.state ?? "",
+      f.landSize?.toString() ?? "",
+      f.primaryCrop ?? "",
+      f.secondaryCrops ?? "",
+      f.isActive ? "Yes" : "No",
+      (f.totalInteractions ?? 0).toString(),
+      f.createdAt ? new Date(f.createdAt).toLocaleDateString() : "",
+    ]);
+    downloadCSV(`farmers_export_${new Date().toISOString().split("T")[0]}.csv`, headers, rows);
   };
 
-  // Download template Excel
+  // Download CSV template
   const handleDownloadTemplate = () => {
-    const templateData = [
-      {
-        "phoneNumber": "919876543210",
-        "name": "Ramesh Kumar",
-        "preferredLanguage": "hindi",
-        "location": "Village Badarpur",
-        "district": "Gurgaon",
-        "state": "Haryana",
-        "landSize": 5,
-        "primaryCrop": "Wheat",
-        "secondaryCrops": "Mustard,Barley",
-      },
-      {
-        "phoneNumber": "919876543211",
-        "name": "Lakshmi Devi",
-        "preferredLanguage": "telugu",
-        "location": "Ramapuram",
-        "district": "Guntur",
-        "state": "Andhra Pradesh",
-        "landSize": 3.5,
-        "primaryCrop": "Rice",
-        "secondaryCrops": "Cotton",
-      },
-      {
-        "phoneNumber": "919876543212",
-        "name": "Rajanna Gowda",
-        "preferredLanguage": "kannada",
-        "location": "Hassan",
-        "district": "Hassan",
-        "state": "Karnataka",
-        "landSize": 10,
-        "primaryCrop": "Coffee",
-        "secondaryCrops": "Pepper,Cardamom",
-      },
+    const headers = ["phoneNumber", "name", "preferredLanguage", "location", "district", "state", "landSize", "primaryCrop", "secondaryCrops"];
+    const rows = [
+      ["919876543210", "Ramesh Kumar", "hindi", "Village Badarpur", "Gurgaon", "Haryana", "5", "Wheat", "Mustard,Barley"],
+      ["919876543211", "Lakshmi Devi", "telugu", "Ramapuram", "Guntur", "Andhra Pradesh", "3.5", "Rice", "Cotton"],
+      ["919876543212", "Rajanna Gowda", "kannada", "Hassan", "Hassan", "Karnataka", "10", "Coffee", "Pepper,Cardamom"],
     ];
-
-    const ws = XLSX.utils.json_to_sheet(templateData);
-    const wb = XLSX.utils.book_new();
-
-    // Add instructions sheet
-    const instructions = [
-      { "Field": "phoneNumber", "Required": "Yes", "Format": "With country code (e.g., 919876543210)", "Example": "919876543210" },
-      { "Field": "name", "Required": "No", "Format": "Farmer full name", "Example": "Ramesh Kumar" },
-      { "Field": "preferredLanguage", "Required": "No", "Format": "english, hindi, telugu, or kannada", "Example": "hindi" },
-      { "Field": "location", "Required": "No", "Format": "Village or area name", "Example": "Village Badarpur" },
-      { "Field": "district", "Required": "No", "Format": "District name", "Example": "Gurgaon" },
-      { "Field": "state", "Required": "No", "Format": "State name", "Example": "Haryana" },
-      { "Field": "landSize", "Required": "No", "Format": "Number in acres", "Example": "5" },
-      { "Field": "primaryCrop", "Required": "No", "Format": "Main crop name", "Example": "Wheat" },
-      { "Field": "secondaryCrops", "Required": "No", "Format": "Comma separated", "Example": "Mustard,Barley" },
-    ];
-    const wsInstructions = XLSX.utils.json_to_sheet(instructions);
-    XLSX.utils.book_append_sheet(wb, wsInstructions, "Instructions");
-    XLSX.utils.book_append_sheet(wb, ws, "Data Template");
-
-    XLSX.writeFile(wb, `farmer_import_template.xlsx`);
+    downloadCSV("farmer_import_template.csv", headers, rows);
   };
 
-  // Import farmers from Excel
+  // Import farmers from CSV/Excel
   const handleImport = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -248,11 +225,8 @@ export default function Farmers() {
     const reader = new FileReader();
     reader.onload = (event) => {
       try {
-        const data = new Uint8Array(event.target?.result as ArrayBuffer);
-        const workbook = XLSX.read(data, { type: "array" });
-        const sheetName = workbook.SheetNames.find((n) => n.toLowerCase().includes("data") || n.toLowerCase().includes("template")) || workbook.SheetNames[workbook.SheetNames.length - 1];
-        const sheet = workbook.Sheets[sheetName];
-        const jsonData = XLSX.utils.sheet_to_json(sheet) as Array<Record<string, unknown>>;
+        const text = event.target?.result as string;
+        const jsonData = parseCSV(text);
 
         const farmers = jsonData.map((row) => ({
           phoneNumber: String(row.phoneNumber || row["Phone Number"] || row["phone"] || "").trim(),
@@ -278,7 +252,7 @@ export default function Farmers() {
         alert("Error reading file: " + err.message);
       }
     };
-    reader.readAsArrayBuffer(file);
+    reader.readAsText(file);
     e.target.value = ""; // Reset input
   };
 
@@ -311,7 +285,7 @@ export default function Farmers() {
           <input
             type="file"
             id="import-farmers"
-            accept=".xlsx,.xls,.csv"
+            accept=".csv"
             className="hidden"
             onChange={handleImport}
           />
@@ -333,11 +307,11 @@ export default function Farmers() {
             <DropdownMenuContent align="end">
               <DropdownMenuItem onClick={handleExport}>
                 <Download className="h-4 w-4 mr-2" />
-                Export All Farmers (.xlsx)
+                Export All Farmers (.csv)
               </DropdownMenuItem>
               <DropdownMenuItem onClick={handleDownloadTemplate}>
                 <FileSpreadsheet className="h-4 w-4 mr-2" />
-                Download Template (.xlsx)
+                Download Template (.csv)
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
