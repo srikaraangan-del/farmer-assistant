@@ -167,16 +167,45 @@ export default function Farmers() {
   const parseCSV = (text: string): Array<Record<string, string>> => {
     const lines = text.trim().split("\n").filter((l) => l.trim());
     if (lines.length < 2) return [];
-    const headers = lines[0].split(",").map((h) => h.replace(/^"|"$/g, "").trim());
+
+    // Parse a single CSV line handling quoted fields
+    const parseLine = (line: string): string[] => {
+      const result: string[] = [];
+      let current = "";
+      let inQuotes = false;
+      for (let i = 0; i < line.length; i++) {
+        const char = line[i];
+        if (char === '"') {
+          if (inQuotes && line[i + 1] === '"') {
+            current += '"';
+            i++;
+          } else {
+            inQuotes = !inQuotes;
+          }
+        } else if (char === ',' && !inQuotes) {
+          result.push(current.trim());
+          current = "";
+        } else {
+          current += char;
+        }
+      }
+      result.push(current.trim());
+      return result;
+    };
+
+    const headers = parseLine(lines[0]).map((h) => h.replace(/^"|"$/g, "").trim());
+    console.log("[Import] CSV headers:", headers);
+
     const result: Array<Record<string, string>> = [];
     for (let i = 1; i < lines.length; i++) {
-      const values = lines[i].split(",").map((v) => v.replace(/^"|"$/g, "").trim());
+      const values = parseLine(lines[i]).map((v) => v.replace(/^"|"$/g, "").trim());
       const row: Record<string, string> = {};
       headers.forEach((h, idx) => {
         row[h] = values[idx] ?? "";
       });
       result.push(row);
     }
+    console.log("[Import] Parsed rows:", result.length, result);
     return result;
   };
 
@@ -217,31 +246,51 @@ export default function Farmers() {
     downloadCSV("farmer_import_template.csv", headers, rows);
   };
 
-  // Import farmers from CSV/Excel
+  // Import farmers from CSV
   const handleImport = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+
+    console.log("[Import] Selected file:", file.name, "size:", file.size);
 
     const reader = new FileReader();
     reader.onload = (event) => {
       try {
         const text = event.target?.result as string;
-        const jsonData = parseCSV(text);
+        console.log("[Import] File content preview:", text.substring(0, 200));
 
-        const farmers = jsonData.map((row) => ({
-          phoneNumber: String(row.phoneNumber || row["Phone Number"] || row["phone"] || "").trim(),
-          name: String(row.name || row["Name"] || "").trim() || undefined,
-          preferredLanguage: String(row.preferredLanguage || row["Preferred Language"] || row["preferred_language"] || "english").trim().toLowerCase() as Language,
-          location: String(row.location || row["Location"] || "").trim() || undefined,
-          district: String(row.district || row["District"] || "").trim() || undefined,
-          state: String(row.state || row["State"] || "").trim() || undefined,
-          landSize: row.landSize || row["Land Size (acres)"] || row["landSize"] ? Number(row.landSize || row["Land Size (acres)"] || row["landSize"]) : undefined,
-          primaryCrop: String(row.primaryCrop || row["Primary Crop"] || row["primaryCrop"] || "").trim() || undefined,
-          secondaryCrops: String(row.secondaryCrops || row["Secondary Crops"] || row["secondaryCrops"] || "").trim() || undefined,
-        })).filter((f) => f.phoneNumber && f.phoneNumber.length >= 10);
+        const jsonData = parseCSV(text);
+        console.log("[Import] Parsed rows:", jsonData.length);
+
+        if (jsonData.length === 0) {
+          alert("No data found in the file. Please use the template format.");
+          return;
+        }
+
+        const farmers = jsonData.map((row, idx) => {
+          const phone = String(row.phoneNumber || row["Phone Number"] || row["phone"] || "").trim();
+          console.log(`[Import] Row ${idx}: phone=`, phone);
+          return {
+            phoneNumber: phone,
+            name: String(row.name || row["Name"] || "").trim() || undefined,
+            preferredLanguage: String(row.preferredLanguage || row["Preferred Language"] || row["preferred_language"] || "english").trim().toLowerCase() as Language,
+            location: String(row.location || row["Location"] || "").trim() || undefined,
+            district: String(row.district || row["District"] || "").trim() || undefined,
+            state: String(row.state || row["State"] || "").trim() || undefined,
+            landSize: row.landSize || row["Land Size (acres)"] || row["landSize"] ? Number(row.landSize || row["Land Size (acres)"] || row["landSize"]) : undefined,
+            primaryCrop: String(row.primaryCrop || row["Primary Crop"] || row["primaryCrop"] || "").trim() || undefined,
+            secondaryCrops: String(row.secondaryCrops || row["Secondary Crops"] || row["secondaryCrops"] || "").trim() || undefined,
+          };
+        }).filter((f) => {
+          const valid = f.phoneNumber && f.phoneNumber.length >= 10;
+          if (!valid) console.log("[Import] Filtered out invalid row:", f);
+          return valid;
+        });
+
+        console.log("[Import] Valid farmers:", farmers.length);
 
         if (farmers.length === 0) {
-          alert("No valid farmers found in the file. Please check the template format.");
+          alert("No valid farmers found. Phone number is required (min 10 digits with country code). Download the template for the correct format.");
           return;
         }
 
@@ -249,8 +298,12 @@ export default function Farmers() {
           importMutation.mutate(farmers);
         }
       } catch (err: any) {
+        console.error("[Import] Error:", err);
         alert("Error reading file: " + err.message);
       }
+    };
+    reader.onerror = () => {
+      alert("Error reading file. Please try again.");
     };
     reader.readAsText(file);
     e.target.value = ""; // Reset input
