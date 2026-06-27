@@ -37,6 +37,7 @@ import {
   FileSpreadsheet,
 } from "lucide-react";
 import { Link } from "react-router";
+import { toast } from "sonner";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -98,10 +99,18 @@ export default function Farmers() {
     onSuccess: (result) => {
       utils.farmers.list.invalidate();
       utils.farmers.stats.invalidate();
-      alert(`Import complete! Inserted: ${result.inserted}, Skipped (duplicates): ${result.skipped}`);
+      if (result.inserted > 0) {
+        toast.success(`${result.inserted} farmer(s) imported successfully!`, {
+          description: result.skipped > 0 ? `${result.skipped} duplicate(s) skipped.` : undefined,
+        });
+      } else {
+        toast.info("No new farmers imported.", {
+          description: `${result.skipped} record(s) were duplicates and skipped.`,
+        });
+      }
     },
     onError: (err) => {
-      alert("Import failed: " + err.message);
+      toast.error("Import failed", { description: err.message });
     },
   });
 
@@ -290,13 +299,24 @@ export default function Farmers() {
         console.log("[Import] Valid farmers:", farmers.length);
 
         if (farmers.length === 0) {
-          alert("No valid farmers found. Phone number is required (min 10 digits with country code). Download the template for the correct format.");
+          toast.error("No valid farmers found", {
+            description: "Phone number is required (min 10 digits with country code). Download the template for the correct format.",
+          });
           return;
         }
 
-        if (confirm(`Found ${farmers.length} farmer(s) to import. Proceed?`)) {
-          importMutation.mutate(farmers);
-        }
+        toast.promise(
+          new Promise((resolve) => {
+            importMutation.mutate(farmers, {
+              onSuccess: (result) => resolve(result),
+            });
+          }),
+          {
+            loading: `Importing ${farmers.length} farmer(s)...`,
+            success: (result: any) => `${result.inserted} farmer(s) added successfully!`,
+            error: "Import failed",
+          }
+        );
       } catch (err: any) {
         console.error("[Import] Error:", err);
         alert("Error reading file: " + err.message);
@@ -335,19 +355,20 @@ export default function Farmers() {
         </div>
         <div className="flex gap-2">
           {/* Import */}
+          <Button
+            variant="outline"
+            onClick={() => document.getElementById("import-farmers")?.click()}
+          >
+            <Upload className="h-4 w-4 mr-2" />
+            Import
+          </Button>
           <input
             type="file"
             id="import-farmers"
-            accept=".csv"
+            accept=".csv,.xlsx,.xls"
             className="hidden"
             onChange={handleImport}
           />
-          <label htmlFor="import-farmers" className="cursor-pointer inline-flex">
-            <Button variant="outline" className="cursor-pointer">
-              <Upload className="h-4 w-4 mr-2" />
-              Import
-            </Button>
-          </label>
 
           {/* Export Dropdown */}
           <DropdownMenu>

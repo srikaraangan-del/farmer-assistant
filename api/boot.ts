@@ -104,9 +104,11 @@ async function processIncomingMessage(phoneNumber: string, message: string, cont
   // 3. Detect intent
   const intent = detectIntent(message);
 
-  // 4. Generate AI response
+  // 4. Generate AI response (async for weather with location)
   const lang = farmer[0]?.preferredLanguage ?? "english";
-  const aiResponse = generateAIResponse(intent, lang);
+  const farmerDistrict = farmer[0]?.district;
+  const farmerState = farmer[0]?.state;
+  const aiResponse = await generateAIResponse(intent, lang, farmerDistrict, farmerState);
 
   // 5. Save farmer message
   await db.insert(messages).values({
@@ -176,6 +178,92 @@ async function sendWhatsAppMessage(toPhoneNumber: string, message: string) {
   }
 }
 
+// Geocode location to lat/lon using Open-Meteo
+async function geocodeLocation(district: string, state: string): Promise<{ lat: number; lon: number; name: string } | null> {
+  try {
+    const query = encodeURIComponent(`${district},${state},India`);
+    const res = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${query}&count=1&language=en&format=json`);
+    const data = await res.json();
+    if (data.results && data.results.length > 0) {
+      return { lat: data.results[0].latitude, lon: data.results[0].longitude, name: data.results[0].name };
+    }
+    // Try just district
+    const res2 = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(district)}&count=1&language=en&format=json`);
+    const data2 = await res2.json();
+    if (data2.results && data2.results.length > 0) {
+      return { lat: data2.results[0].latitude, lon: data2.results[0].longitude, name: data2.results[0].name };
+    }
+  } catch (e) {
+    console.error("[Weather] Geocoding error:", e);
+  }
+  return null;
+}
+
+// Fetch weather from Open-Meteo
+async function fetchWeather(district: string, state: string): Promise<{ temp: number; humidity: number; rainProb: number; condition: string; forecast: string } | null> {
+  try {
+    const geo = await geocodeLocation(district, state);
+    if (!geo) return null;
+
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${geo.lat}&longitude=${geo.lon}&current=temperature_2m,relative_humidity_2m,precipitation_probability,weather_code&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=auto&forecast_days=3`;
+    const res = await fetch(url);
+    const data = await res.json();
+
+    const current = data.current;
+    const daily = data.daily;
+
+    // WMO weather code to text
+    const wmoCodes: Record<number, string> = {
+      0: "Clear sky", 1: "Mainly clear", 2: "Partly cloudy", 3: "Overcast",
+      45: "Foggy", 48: "Depositing rime fog",
+      51: "Light drizzle", 53: "Moderate drizzle", 55: "Dense drizzle",
+      61: "Slight rain", 63: "Moderate rain", 65: "Heavy rain",
+      71: "Slight snow", 73: "Moderate snow", 75: "Heavy snow",
+      80: "Slight rain showers", 81: "Moderate rain showers", 82: "Violent rain showers",
+      95: "Thunderstorm", 96: "Thunderstorm with hail",
+    };
+
+    const condition = wmoCodes[current.weather_code] ?? "Unknown";
+    const tomorrowRain = daily.precipitation_probability_max[1] ?? 0;
+
+    return {
+      temp: Math.round(current.temperature_2m),
+      humidity: current.relative_humidity_2m,
+      rainProb: current.precipitation_probability ?? tomorrowRain,
+      condition,
+      forecast: `High: ${Math.round(daily.temperature_2m_max[0])}°C, Low: ${Math.round(daily.temperature_2m_min[0])}°C`,
+    };
+  } catch (e) {
+    console.error("[Weather] Fetch error:", e);
+  }
+  return null;
+}
+
+// Format weather response in farmer's language
+async function getWeatherResponse(district: string, state: string, lang: string): Promise<string> {
+  const weather = await fetchWeather(district, state);
+  if (!weather) {
+    // Fallback to generic response
+    const fallbacks: Record<string, string> = {
+      english: `Weather for ${district}:\n\nUnable to fetch live data. Please try again later.`,
+      hindi: `${district} ka mausam:\n\nLive data prapt karne mein asafal. Kripaya baad mein prayas karein.`,
+      telugu: `${district} vaataavaran:\n\nLive data andhukonalekapoyam. Dayachesi maaliki prayathincandi.`,
+      kannada: `${district} havamāna:\n\nJīva dāṭa pāḍalu sādhyavāgilla. Dayavittu māḍi punaḥ prayatna māḍi.`,
+    };
+    return fallbacks[lang] ?? fallbacks.english;
+  }
+
+  const templates: Record<string, (w: typeof weather, loc: string) => string> = {
+    english: (w, loc) => `Weather for ${loc}:\n\nNow: ${w.temp}°C, ${w.condition}\nHumidity: ${w.humidity}%\nRain chance: ${w.rainProb}%\nToday: ${w.forecast}\n\n${w.rainProb > 50 ? "Carry umbrella! Rain likely." : "Good weather for farm work today."}`,
+    hindi: (w, loc) => `${loc} ka mausam:\n\nAbhi: ${w.temp}°C, ${w.condition}\nNami: ${w.humidity}%\nBarish ki sambhavna: ${w.rainProb}%\nAaj: ${w.forecast}\n\n${w.rainProb > 50 ? "Chhatra le jayein! Barish ki sambhavna hai." : "Aaj kheti ke liye achha mausam hai."}`,
+    telugu: (w, loc) => `${loc} vaataavaran:\n\nIppudu: ${w.temp}°C, ${w.condition}\nTegovata: ${w.humidity}%\nVarsham avakasam: ${w.rainProb}%\nEroju: ${w.forecast}\n\n${w.rainProb > 50 ? "Gotta teeskoni vellandi! Varsham sambhavam undi." : "Eroju rythu paniki manchi vaataavaranam."}`,
+    kannada: (w, loc) => `${loc} havamāna:\n\nIga: ${w.temp}°C, ${w.condition}\nArdhrate: ${w.humidity}%\nMalé sambhavane: ${w.rainProb}%\nIvattu: ${w.forecast}\n\n${w.rainProb > 50 ? "Kudure tegedkondi! Malé sambhavane ide." : "Ivattu kr̥ṣi kelsakke olleya havamāna."}`,
+  };
+
+  const template = templates[lang] ?? templates.english;
+  return template(weather, district);
+}
+
 function detectIntent(message: string): string {
   const lower = message.toLowerCase();
   const intents = [
@@ -192,7 +280,12 @@ function detectIntent(message: string): string {
   return "general";
 }
 
-function generateAIResponse(intent: string, lang: string): string {
+async function generateAIResponse(intent: string, lang: string, district?: string | null, state?: string | null): Promise<string> {
+  // If weather intent and farmer has location, fetch real weather
+  if (intent === "weather" && district && state) {
+    return await getWeatherResponse(district, state, lang);
+  }
+
   const responses: Record<string, Record<string, string>> = {
     weather: {
       english: "Here's the weather forecast for your area:\n\nToday: 32C, Humidity 65%, Rain probability 20%\nTomorrow: 30C, Rain probability 45%\n\nLight rain expected tomorrow afternoon. Good conditions for field work today.",
