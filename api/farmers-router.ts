@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { createRouter, publicQuery, adminQuery } from "./middleware";
 import { getDb } from "./queries/connection";
-import { farmers } from "@db/schema";
+import { farmers, conversations, messages, dailyBriefings, analyticsEvents } from "@db/schema";
 import { eq, like, and, desc, sql, count } from "drizzle-orm";
 
 export const farmersRouter = createRouter({
@@ -154,8 +154,31 @@ export const farmersRouter = createRouter({
     .input(z.object({ id: z.number() }))
     .mutation(async ({ input }) => {
       const db = getDb();
-      await db.delete(farmers).where(eq(farmers.id, input.id));
-      return { success: true };
+      const farmerId = input.id;
+
+      // Cascade delete: remove all related records first
+      // 1. Delete messages referencing this farmer's conversations
+      const convRows = await db.select({ id: conversations.id }).from(conversations).where(eq(conversations.farmerId, farmerId));
+      const convIds = convRows.map((c) => c.id);
+      if (convIds.length > 0) {
+        for (const cid of convIds) {
+          await db.delete(messages).where(eq(messages.conversationId, cid));
+        }
+      }
+
+      // 2. Delete conversations
+      await db.delete(conversations).where(eq(conversations.farmerId, farmerId));
+
+      // 3. Delete analytics events
+      await db.delete(analyticsEvents).where(eq(analyticsEvents.farmerId, farmerId));
+
+      // 4. Delete daily briefings
+      await db.delete(dailyBriefings).where(eq(dailyBriefings.farmerId, farmerId));
+
+      // 5. Finally delete the farmer
+      await db.delete(farmers).where(eq(farmers.id, farmerId));
+
+      return { success: true, deletedId: farmerId };
     }),
 
   exportAll: publicQuery.query(async () => {
