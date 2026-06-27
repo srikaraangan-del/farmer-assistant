@@ -32,6 +32,7 @@ import {
   ChevronRight,
   Edit,
   Eye,
+  Trash2,
   Upload,
   Download,
   FileSpreadsheet,
@@ -93,6 +94,17 @@ export default function Farmers() {
 
   const toggleMutation = trpc.farmers.toggleActive.useMutation({
     onSuccess: () => utils.farmers.list.invalidate(),
+  });
+
+  const deleteMutation = trpc.farmers.delete.useMutation({
+    onSuccess: () => {
+      utils.farmers.list.invalidate();
+      utils.farmers.stats.invalidate();
+      toast.success("Farmer deleted successfully");
+    },
+    onError: (err) => {
+      toast.error("Failed to delete farmer", { description: err.message });
+    },
   });
 
   const importMutation = trpc.farmers.importBulk.useMutation({
@@ -613,6 +625,19 @@ export default function Farmers() {
                               <Eye className="h-3.5 w-3.5" />
                             </Button>
                           </Link>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                            onClick={() => {
+                              if (confirm(`Are you sure you want to delete ${farmer.name || farmer.phoneNumber}?`)) {
+                                deleteMutation.mutate({ id: farmer.id });
+                              }
+                            }}
+                            disabled={deleteMutation.isPending}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
                         </div>
                       </td>
                     </tr>

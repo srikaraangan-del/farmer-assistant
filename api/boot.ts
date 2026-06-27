@@ -181,17 +181,16 @@ async function sendWhatsAppMessage(toPhoneNumber: string, message: string) {
 // Geocode location to lat/lon using Open-Meteo
 async function geocodeLocation(district: string, state: string): Promise<{ lat: number; lon: number; name: string } | null> {
   try {
-    const query = encodeURIComponent(`${district},${state},India`);
-    const res = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${query}&count=1&language=en&format=json`);
+    // Try district name alone first (most reliable)
+    const res = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(district)}&count=3&language=en&format=json`);
     const data = await res.json();
+    console.log(`[Weather] Geocode for "${district}":`, JSON.stringify(data.results?.map((r: any) => ({ name: r.name, country: r.country })) ?? "no results"));
+
     if (data.results && data.results.length > 0) {
-      return { lat: data.results[0].latitude, lon: data.results[0].longitude, name: data.results[0].name };
-    }
-    // Try just district
-    const res2 = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(district)}&count=1&language=en&format=json`);
-    const data2 = await res2.json();
-    if (data2.results && data2.results.length > 0) {
-      return { lat: data2.results[0].latitude, lon: data2.results[0].longitude, name: data2.results[0].name };
+      // Pick the one in India if multiple
+      const indiaResult = data.results.find((r: any) => r.country === "India");
+      const best = indiaResult ?? data.results[0];
+      return { lat: best.latitude, lon: best.longitude, name: best.name };
     }
   } catch (e) {
     console.error("[Weather] Geocoding error:", e);
@@ -203,11 +202,29 @@ async function geocodeLocation(district: string, state: string): Promise<{ lat: 
 async function fetchWeather(district: string, state: string): Promise<{ temp: number; humidity: number; rainProb: number; condition: string; forecast: string } | null> {
   try {
     const geo = await geocodeLocation(district, state);
-    if (!geo) return null;
+    if (!geo) {
+      console.error(`[Weather] Could not geocode: ${district}, ${state}`);
+      return null;
+    }
+    console.log(`[Weather] Geocoded ${district} → ${geo.name} (${geo.lat}, ${geo.lon})`);
 
-    const url = `https://api.open-meteo.com/v1/forecast?latitude=${geo.lat}&longitude=${geo.lon}&current=temperature_2m,relative_humidity_2m,precipitation_probability,weather_code&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=auto&forecast_days=3`;
+    // precipitation_probability is NOT in current - use daily for rain chance
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${geo.lat}&longitude=${geo.lon}&current=temperature_2m,relative_humidity_2m,weather_code,is_day&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=auto&forecast_days=3`;
+    console.log(`[Weather] API URL: ${url}`);
+
     const res = await fetch(url);
+    if (!res.ok) {
+      console.error(`[Weather] API error: ${res.status}`);
+      return null;
+    }
+
     const data = await res.json();
+    console.log(`[Weather] API response keys:`, Object.keys(data));
+
+    if (!data.current) {
+      console.error(`[Weather] No current data in response`);
+      return null;
+    }
 
     const current = data.current;
     const daily = data.daily;
@@ -215,49 +232,52 @@ async function fetchWeather(district: string, state: string): Promise<{ temp: nu
     // WMO weather code to text
     const wmoCodes: Record<number, string> = {
       0: "Clear sky", 1: "Mainly clear", 2: "Partly cloudy", 3: "Overcast",
-      45: "Foggy", 48: "Depositing rime fog",
-      51: "Light drizzle", 53: "Moderate drizzle", 55: "Dense drizzle",
-      61: "Slight rain", 63: "Moderate rain", 65: "Heavy rain",
-      71: "Slight snow", 73: "Moderate snow", 75: "Heavy snow",
-      80: "Slight rain showers", 81: "Moderate rain showers", 82: "Violent rain showers",
+      45: "Foggy", 48: "Rime fog",
+      51: "Light drizzle", 53: "Moderate drizzle", 55: "Heavy drizzle",
+      61: "Light rain", 63: "Moderate rain", 65: "Heavy rain",
+      71: "Light snow", 73: "Moderate snow", 75: "Heavy snow",
+      80: "Rain showers", 81: "Moderate showers", 82: "Heavy showers",
       95: "Thunderstorm", 96: "Thunderstorm with hail",
     };
 
     const condition = wmoCodes[current.weather_code] ?? "Unknown";
-    const tomorrowRain = daily.precipitation_probability_max[1] ?? 0;
+    // Use daily precipitation_probability_max for today
+    const rainProb = daily?.precipitation_probability_max?.[0] ?? 0;
+
+    console.log(`[Weather] Result: ${Math.round(current.temperature_2m)}°C, ${condition}, Humidity: ${current.relative_humidity_2m}%, Rain: ${rainProb}%`);
 
     return {
       temp: Math.round(current.temperature_2m),
       humidity: current.relative_humidity_2m,
-      rainProb: current.precipitation_probability ?? tomorrowRain,
+      rainProb,
       condition,
       forecast: `High: ${Math.round(daily.temperature_2m_max[0])}°C, Low: ${Math.round(daily.temperature_2m_min[0])}°C`,
     };
-  } catch (e) {
-    console.error("[Weather] Fetch error:", e);
+  } catch (e: any) {
+    console.error("[Weather] Fetch error:", e.message);
   }
   return null;
 }
 
 // Format weather response in farmer's language
 async function getWeatherResponse(district: string, state: string, lang: string): Promise<string> {
+  console.log(`[Weather] Getting weather for ${district}, ${state} in ${lang}`);
   const weather = await fetchWeather(district, state);
   if (!weather) {
-    // Fallback to generic response
     const fallbacks: Record<string, string> = {
       english: `Weather for ${district}:\n\nUnable to fetch live data. Please try again later.`,
-      hindi: `${district} ka mausam:\n\nLive data prapt karne mein asafal. Kripaya baad mein prayas karein.`,
-      telugu: `${district} vaataavaran:\n\nLive data andhukonalekapoyam. Dayachesi maaliki prayathincandi.`,
-      kannada: `${district} havamāna:\n\nJīva dāṭa pāḍalu sādhyavāgilla. Dayavittu māḍi punaḥ prayatna māḍi.`,
+      hindi: `${district} का मौसम:\n\nलाइव डेटा प्राप्त करने में असफल। कृपया बाद में प्रयास करें।`,
+      telugu: `${district} వాతావరణం:\n\nలైవ్ డేటా అందుకోలేకపోయాము. దయచేసి మళ్ళీ ప్రయత్నించండి.`,
+      kannada: `${district} ಹವಾಮಾನ:\n\nಲೈವ್ ಡೇಟಾ ಪಡೆಯಲು ಸಾಧ್ಯವಾಗಿಲ್ಲ. ದಯವಿಟ್ಟು ಮತ್ತೆ ಪ್ರಯತ್ನಿಸಿ.`,
     };
     return fallbacks[lang] ?? fallbacks.english;
   }
 
   const templates: Record<string, (w: typeof weather, loc: string) => string> = {
     english: (w, loc) => `Weather for ${loc}:\n\nNow: ${w.temp}°C, ${w.condition}\nHumidity: ${w.humidity}%\nRain chance: ${w.rainProb}%\nToday: ${w.forecast}\n\n${w.rainProb > 50 ? "Carry umbrella! Rain likely." : "Good weather for farm work today."}`,
-    hindi: (w, loc) => `${loc} ka mausam:\n\nAbhi: ${w.temp}°C, ${w.condition}\nNami: ${w.humidity}%\nBarish ki sambhavna: ${w.rainProb}%\nAaj: ${w.forecast}\n\n${w.rainProb > 50 ? "Chhatra le jayein! Barish ki sambhavna hai." : "Aaj kheti ke liye achha mausam hai."}`,
-    telugu: (w, loc) => `${loc} vaataavaran:\n\nIppudu: ${w.temp}°C, ${w.condition}\nTegovata: ${w.humidity}%\nVarsham avakasam: ${w.rainProb}%\nEroju: ${w.forecast}\n\n${w.rainProb > 50 ? "Gotta teeskoni vellandi! Varsham sambhavam undi." : "Eroju rythu paniki manchi vaataavaranam."}`,
-    kannada: (w, loc) => `${loc} havamāna:\n\nIga: ${w.temp}°C, ${w.condition}\nArdhrate: ${w.humidity}%\nMalé sambhavane: ${w.rainProb}%\nIvattu: ${w.forecast}\n\n${w.rainProb > 50 ? "Kudure tegedkondi! Malé sambhavane ide." : "Ivattu kr̥ṣi kelsakke olleya havamāna."}`,
+    hindi: (w, loc) => `${loc} का मौसम:\n\nअभी: ${w.temp}°C, ${w.condition}\nनमी: ${w.humidity}%\nबारिश की संभावना: ${w.rainProb}%\nआज: ${w.forecast}\n\n${w.rainProb > 50 ? "छाता ले जाएं! बारिश की संभावना है।" : "आज खेती के लिए अच्छा मौसम है।"}`,
+    telugu: (w, loc) => `${loc} వాతావరణం:\n\nఇప్పుడు: ${w.temp}°C, ${w.condition}\nతేగోవత: ${w.humidity}%\nవర్షం అవకాశం: ${w.rainProb}%\nఈరోజు: ${w.forecast}\n\n${w.rainProb > 50 ? "గొడ్డ తీసుకొని వెళ్ళండి! వర్షం అవకాశం ఉంది." : "ఈరోజు రైతు పనికి మంచి వాతావరణం."}`,
+    kannada: (w, loc) => `${loc} ಹವಾಮಾನ:\n\nಈಗ: ${w.temp}°C, ${w.condition}\nಆರ್ದ್ರತೆ: ${w.humidity}%\nಮಳೆ ಸಂಭವನೀಯತೆ: ${w.rainProb}%\nಇವತ್ತು: ${w.forecast}\n\n${w.rainProb > 50 ? "ಕುಡುರೆ ತೆಗೆದುಕೊಂಡು ಹೋಗಿ! ಮಳೆ ಸಾಧ್ಯತೆ ಇದೆ." : "ಇವತ್ತು ಕೃಷಿ ಕೆಲಸಕ್ಕೆ ಒಳ್ಳೆಯ ಹವಾಮಾನ."}`,
   };
 
   const template = templates[lang] ?? templates.english;
@@ -288,40 +308,40 @@ async function generateAIResponse(intent: string, lang: string, district?: strin
 
   const responses: Record<string, Record<string, string>> = {
     weather: {
-      english: "Here's the weather forecast for your area:\n\nToday: 32C, Humidity 65%, Rain probability 20%\nTomorrow: 30C, Rain probability 45%\n\nLight rain expected tomorrow afternoon. Good conditions for field work today.",
-      hindi: "Aapke kshetra ke mausam ki jaankari:\n\nAaj: 32C, Nami 65%, Barish ki sambhavna 20%\nKal: 30C, Barish ki sambhavna 45%\n\nKal dopahar mein halki barish ki ashanka hai.",
-      telugu: "Me priantam vaataavaran samacharam:\n\nEroju: 32C, Tegovata 65%, Varsham avakasam 20%\nRepu: 30C, Varsham avakasam 45%\n\nRepu madhyanam jalla vana sambhavam undi.",
-      kannada: "Nimma pradeshada havamanavannu tilisuttane:\n\nIvattu: 32C, Ardhrate 65%, Malé sambhavane 20%\nNale: 30C, Malé sambhavane 45%\n\nNale madhyahna halke malé y sambhavane ide. Ivattu kelsakke olleya sithi.",
+      english: "Here's the weather forecast for your area:\n\nToday: 32°C, Humidity 65%, Rain probability 20%\nTomorrow: 30°C, Rain probability 45%\n\nLight rain expected tomorrow afternoon. Good conditions for field work today.",
+      hindi: "आपके क्षेत्र का मौसम:\n\nआज: 32°C, नमी 65%, बारिश की संभावना 20%\nकल: 30°C, बारिश की संभावना 45%\n\nकल दोपहर में हल्की बारिश की आशंका है।",
+      telugu: "మీ ప్రాంతం వాతావరణ సమాచారం:\n\nఈరోజు: 32°C, తేగోవత 65%, వర్షం అవకాశం 20%\nరేపు: 30°C, వర్షం అవకాశం 45%\n\nరేపు మధ్యాహ్నం జల్ల వాన సంభవం ఉంది.",
+      kannada: "ನಿಮ್ಮ ಪ್ರದೇಶದ ಹವಾಮಾನ:\n\nಇವತ್ತು: 32°C, ಆರ್ದ್ರತೆ 65%, ಮಳೆ ಸಂಭವನೀಯತೆ 20%\nನಾಳೆ: 30°C, ಮಳೆ ಸಂಭವನೀಯತೆ 45%\n\nನಾಳೆ ಮಧ್ಯಾಹ್ನ ಸೌಮ್ಯ ಮಳೆ ಸಾಧ್ಯತೆ ಇದೆ.",
     },
     market_price: {
       english: "Current market prices:\n\nRice: INR 2,150/quintal\nWheat: INR 2,450/quintal\nCotton: INR 6,800/quintal\n\nPrices are trending upward this week. Good time to sell.",
-      hindi: "Vartaman bazar bhav:\n\nChawal: INR 2,150/quintal\nGehun: INR 2,450/quintal\nKapas: INR 6,800/quintal\n\nIs hafte bhav badhte hue hain. Bechne ka achha samay hai.",
-      telugu: "Praastuta marketu dharalu:\n\nBiyyam: INR 2,150/quintal\nGodhumalu: INR 2,450/quintal\nPathi: INR 6,800/quintal\n\nEe vaaram dharalu penchu vaduna unnaay.",
-      kannada: "Vartamana bajara bele:\n\nAkki: INR 2,150/quintal\nGodhi: INR 2,450/quintal\nHatti: INR 6,800/quintal\n\nIvaara bele erelu mele kade ide. Mārāṭake olleya samaya.",
+      hindi: "वर्तमान बाजार भाव:\n\nचावल: INR 2,150/क्विंटल\nगेहूं: INR 2,450/क्विंटल\nकपास: INR 6,800/क्विंटल\n\nइस हफ्ते भाव बढ़ते हुए हैं। बेचने का अच्छा समय है।",
+      telugu: "ప్రస్తుత మార్కెట్ ధరలు:\n\nబియ్యం: INR 2,150/క్వింటాల్\nగోధుమలు: INR 2,450/క్వింటాల్\nపత్తి: INR 6,800/క్వింటాల్\n\nఈ వారం ధరలు పెంచు వద్దున్నాయి.",
+      kannada: "ವर्तಮಾನ ಬಜಾರ ಬೆಲೆ:\n\nಅಕ್ಕಿ: INR 2,150/ಕ್ವಿಂಟಾಲ್\nಗೋಧಿ: INR 2,450/ಕ್ವಿಂಟಾಲ್\nಹತ್ತಿ: INR 6,800/ಕ್ವಿಂಟಾಲ್\n\nಈ ವಾರ ಬೆಲೆ ಏರಿಕೆಯಾಗುತ್ತಿದೆ. ಮಾರಾಟಕ್ಕೆ ಒಳ್ಳೆಯ ಸಮಯ.",
     },
     scheme: {
       english: "Available government schemes:\n\n1. PM-KISAN: Rs 6,000/year income support\n2. Soil Health Card: Free soil testing\n3. Kisan Credit Card: Low-interest loans at 4%\n4. PMFBY: Crop insurance with 50% subsidy\n\nReply with scheme name for more details.",
-      hindi: "Sarkari yojnaayein:\n\n1. PM-KISAN: Rs 6,000/saal aay sahaayta\n2. Soil Health Card: Muft mitti jaanch\n3. Kisan Credit Card: 4% par kam byaaj loan\n4. PMFBY: Fasal bima 50% subsidy ke saath\n\nAur jaankari ke liye yojna ka naam bhejein.",
-      telugu: "Praabhutva paddhatulu:\n\n1. PM-KISAN: Rs 6,000/samvatsaram aadaya madad\n2. Soil Health Card: Uchita mruttika pariksha\n3. Kisan Credit Card: 4% takku veyyi runam\n4. PMFBY: 50% subsidy tho panta beema\n\nEkkuva vivaraalaku paddhati peru reply ivvandi.",
-      kannada: "Prastuta sarkari yojanegalu:\n\n1. PM-KISAN: Varshake Rs 6,000 aaya samarthane\n2. Soil Health Card: Uchita mannina parikshe\n3. Kisan Credit Card: 4% kam byaada salle\n4. PMFBY: 50% subsidy jotege baale beeme\n\nHecchu mahitige yojaneya hesaru reply kodi.",
+      hindi: "सरकारी योजनाएं:\n\n1. PM-KISAN: Rs 6,000/साल आय सहायता\n2. सॉइल हेल्थ कार्ड: मुफ्त मिट्टी जांच\n3. किसान क्रेडिट कार्ड: 4% पर कम ब्याज ऋण\n4. PMFBY: 50% सब्सिडी के साथ फसल बीमा\n\nऔर जानकारी के लिए योजना का नाम भेजें।",
+      telugu: "ప్రభుత్వ పథకాలు:\n\n1. PM-KISAN: Rs 6,000/సంవత్సరం ఆదాయ మద్దతు\n2. సాయిల్ హెల్త్ కార్డ్: ఉచిత మట్టి పరీక్ష\n3. కిసాన్ క్రెడిట్ కార్డ్: 4% తక్కువ వడ్డీ రుణం\n4. PMFBY: 50% సబ్సిడీతో పంట బీమా\n\nఎక్కువ వివరాలకు పథకం పేరు రిప్లై ఇవ్వండి.",
+      kannada: "ಪ್ರಸ್ತುತ ಸರ್ಕಾರಿ ಯೋಜನೆಗಳು:\n\n1. PM-KISAN: ವರ್ಷಕ್ಕೆ Rs 6,000 ಆಯ ಸಮರ್ಥನೆ\n2. ಸಾಯಿಲ್ ಹೆಲ್ತ್ ಕಾರ್ಡ್: ಉಚಿತ ಮಣ್ಣಿನ ಪರೀಕ್ಷೆ\n3. ಕಿಸಾನ್ ಕ್ರೆಡಿಟ್ ಕಾರ್ಡ್: 4% ಕಡಿಮೆ ಬಡ್ಡದ ಸಾಲ\n4. PMFBY: 50% ಸಬ್ಸಿಡಿಯೊಂದಿಗೆ ಬೆಳೆ ವಿಮೆ\n\nಹೆಚ್ಚು ಮಾಹಿತಿಗೆ ಯೋಜನೆಯ ಹೆಸರು ರಿಪ್ಲೈ ಕೊಡಿ.",
     },
     crop_advice: {
       english: "For your crop, here are the recommendations:\n\nFertilizer: Apply NPK 20-20-20 at 50kg/acre\nPest Control: Monitor for stem borer. Use neem-based spray if needed.\nIrrigation: Water every 7-10 days depending on soil moisture.\n\nWould you like advice on a specific crop stage?",
-      hindi: "Aapki fasal ke liye salah:\n\nKhud: NPK 20-20-20, 50kg/acre lagayein\nKeet niyantran: Stem borer ki nigraani rakhein. Neem spray istemal karein.\nSinchai: 7-10 din mein paani den.\n\nKisi vishesh avastha ki jaankari chahiye?",
-      telugu: "Me panta ku sifarsula:\n\nYeruvu: NPK 20-20-20, 50kg/acre vadesi\nPuru niyantranam: Stem borer ku sikan chesi.\nNiti purugu: 7-10 rojula ku niti ivvandi.\n\nKoni visista dasa gurinchi salaha kavala?",
-      kannada: "Nimma balige sifarish:\n\nGobbara: NPK 20-20-20, 50kg/ekre haki\nKīṭa niyamtrana: Stem borer gāgale. Bevaru aḍhāre spray.\nNeerāvaraṇa: 7-10 dinakke oṃdu sāri nīru haki.\n\nViśeṣa belēyada kāla gāgi sūkṣma salāhe bēkā?",
+      hindi: "आपकी फसल के लिए सलाह:\n\nउर्वरक: NPK 20-20-20, 50kg/एकड़ लगाएं\nकीट नियंत्रण: स्टेम बोरर की निगरानी रखें। जरूरत हो तो नीम स्प्रे का उपयोग करें।\nसिंचाई: 7-10 दिन में पानी दें।\n\nकिसी विशेष अवस्था की जानकारी चाहिए?",
+      telugu: "మీ పంటకు సిఫార్సులు:\n\nఎరువు: NPK 20-20-20, 50kg/ఎకరం వాడండి\nపురుగు నియంత్రణ: స్టెమ్ బోరర్ కు సిక్షణ చేయండి.\nనీటి పారుదల: 7-10 రోజులకు నీరు ఇవ్వండి.\n\nకొన్ని విశిష్ట దశ గురించి సలహా కావాలా?",
+      kannada: "ನಿಮ್ಮ ಬೆಳೆಗೆ ಸಲಹೆ:\n\nಗೊಬ್ಬರ: NPK 20-20-20, 50kg/ಎಕರೆ ಹಾಕಿ\nಕೀಟ ನಿಯಂತ್ರಣ: ಸ್ಟೆಮ್ ಬೋರರ್ ಗಮನಿಸಿ. ಬೇವು ಆಧಾರಿತ ಸ್ಪ್ರೇ ಬಳಸಿ.\nನೀರಾವರಣ: 7-10 ದಿನಕ್ಕೊಮ್ಮೆ ನೀರು ಹಾಕಿ.\n\nವಿಶಿಷ್ಟ ಬೆಳೆಯ stages ಗೆ ಸಲಹೆ ಬೇಕಾ?",
     },
     greeting: {
       english: "Hello! Welcome to AI Farmer Assistant.\n\nI can help you with:\n- Weather updates\n- Market prices\n- Government schemes\n- Farming advice\n\nWhat would you like to know?",
-      hindi: "Namaste! AI Farmer Assistant mein aapka swagat hai.\n\nMain aapki madad kar sakta hoon:\n- Mausam ki jaankari\n- Bazar bhav\n- Sarkari yojnaayein\n- Kheti salah\n\nAap kya jaanna chahte hain?",
-      telugu: "Namaskaram! AI Farmer Assistant ku swagatam.\n\nNenu meeku sahayam cheyagalan vishayaalu:\n- Vataavaran paridi\n- Marketu dharalu\n- Praabhutva paddhatulu\n- Vyavasaaya salaha\n\nMeeku emi telusukovalani undi?",
-      kannada: "Namaskara! AI Farmer Assistant ge svāgata.\n\nNānu nimge sahāya māḍabahudāgiruvudu:\n- Havamāna māhiti\n- Bajāra bele\n- Sarkāri yojanegalu\n- Kr̥ṣi salāhe\n\nNīvu yāvu māhitiya beko?",
+      hindi: "नमस्ते! AI Farmer Assistant में आपका स्वागत है।\n\nमैं आपकी मदद कर सकता हूं:\n- मौसम की जानकारी\n- बाजार भाव\n- सरकारी योजनाएं\n- खेती सलाह\n\nआप क्या जानना चाहते हैं?",
+      telugu: "నమస్కారం! AI Farmer Assistant కు స్వాగతం.\n\nనేను మీకు సహాయం చేయగల విషయాలు:\n- వాతావరణ సమాచారం\n- మార్కెట్ ధరలు\n- ప్రభుత్వ పథకాలు\n- వ్యవసాయ సలహా\n\nమీకు ఏమి తెలుసుకోవాలని ఉంది?",
+      kannada: "ನಮಸ್ಕಾರ! AI Farmer Assistant ಗೆ ಸ್ವಾಗತ.\n\nನಾನು ನಿಮಗೆ ಸಹಾಯ ಮಾಡಬಹುದಾದ ವಿಷಯಗಳು:\n- ಹವಾಮಾನ ಮಾಹಿತಿ\n- ಬಜಾರ ಬೆಲೆ\n- ಸರ್ಕಾರಿ ಯೋಜನೆಗಳು\n- ಕೃಷಿ ಸಲಹೆ\n\nನೀವು ಯಾವ ಮಾಹಿತಿ ಬೇಕು?",
     },
     general: {
       english: "I understand. I'm here to help farmers with weather, market prices, government schemes, and farming advice.\n\nWhat specific information do you need?",
-      hindi: "Main samajh gaya. Main kisaanon ki madad ke liye yahan hoon.\n\nAapko kis vishesh jaankari ki zaroorat hai?",
-      telugu: "Ardamaindi. Nenu rytulaku sahayam cheyadaniki vunnaanu.\n\nMeeku emi visista samacharam kavali?",
-      kannada: "Nanage artha vāyitu. Raitarigé havamāna, bajāra bele, sarkāri yojané, mattu kr̥ṣi salāhe kottalu nānu illi iddéne.\n\nNimagé yāvu viśēṣa māhiti bēku?",
+      hindi: "मैं समझ गया। मैं किसानों की मदद के लिए यहां हूं।\n\nमौसम, बाजार भाव, सरकारी योजनाएं, और खेती सलाह।\n\nआपको किस विशेष जानकारी की जरूरत है?",
+      telugu: "అర్థమైంది. నేను రైతులకు సహాయం చేయడానికి ఉన్నాను.\n\nవాతావరణం, మార్కెట్ ధరలు, ప్రభుత్వ పథకాలు, వ్యవసాయ సలహా.\n\nమీకు ఏమి విశిష్ట సమాచారం కావాలి?",
+      kannada: "ಅರ್ಥವಾಯಿತು. ನಾನು ರೈತರಿಗೆ ಸಹಾಯ ಮಾಡಲು ಇಲ್ಲಿದ್ದೇನೆ.\n\nಹವಾಮಾನ, ಬಜಾರ ಬೆಲೆ, ಸರ್ಕಾರಿ ಯೋಜನೆಗಳು, ಕೃಷಿ ಸಲಹೆ.\n\nನಿಮಗೆ ಯಾವ ವಿಶೇಷ ಮಾಹಿತಿ ಬೇಕು?",
     },
   };
 
