@@ -285,19 +285,144 @@ async function getWeatherResponse(district: string, state: string, lang: string)
 }
 
 function detectIntent(message: string): string {
-  const lower = message.toLowerCase();
+  const lower = message.toLowerCase().trim();
+
+  // Native script keywords (Telugu, Hindi, Kannada) + English
   const intents = [
-    { keywords: ["weather", "rain", "temperature", "barish", "mausam", "vaana", "haṅgāmu", "maḷe"], intent: "weather" },
-    { keywords: ["price", "rate", "mandi", "bazar", "dhara", "dar", "bele", "belli", "dharaṇi"], intent: "market_price" },
-    { keywords: ["scheme", "subsidy", "loan", "yojana", "pension", "yojane", "salle", "vṛtti"], intent: "scheme" },
-    { keywords: ["fertilizer", "pest", "disease", "crop", "panta", "gobbara", "kīṭa", "roga", "balé"], intent: "crop_advice" },
-    { keywords: ["hello", "hi", "namaste", "namaskaram", "namaskāra"], intent: "greeting" },
-    { keywords: ["voice", "audio", "speak"], intent: "voice_request" },
+    {
+      keywords: [
+        "weather", "rain", "temperature", "forecast", "mausam", "barish",
+        "vaana", "vaanam", "avadhanam", "havaaman", "havamana",
+        "వాతావరణం", "వాన", "వర్షం", "వాతావరణ", "మోసం", "మౌసమ్",
+        "मौसम", "बारिश", "मौसमी", "वर्षा", "तापमान",
+        "ಹವಾಮಾನ", "ಮಳೆ", "ತಾಪಮಾನ",
+      ],
+      intent: "weather",
+    },
+    {
+      keywords: [
+        "price", "rate", "cost", "value", "selling", "mandi", "bazar", "market",
+        "dhara", "dar", "bele", "belli", "dhaam", "bhaav",
+        "ధర", "ధరలు", "మార్కెట్", "మార్కెట్ ధరలు", "మార్కెటు", "బజార్", "మండి",
+        "మార్కెట్ ధర", "అమ్మకం", "కొనుగోలు", "ధరల",
+        "भाव", "दाम", "मंडी", "बाजार", "कीमत", "मूल्य", "बिक्री", "बेचने",
+        "ಬೆಲೆ", "ಬೆಲೆಗಳು", "ಮಾರುಕಟ್ಟೆ", "ಮಂಡಿ", "ಮಾರಾಟ",
+      ],
+      intent: "market_price",
+    },
+    {
+      keywords: [
+        "scheme", "yojana", "subsidy", "loan", "pension", "government",
+        "yojane", "paddhati", "salle", "vritti",
+        "పథకం", "పథకాలు", "యోజన", "యోజనలు", "సబ్సిడీ", "రుణం", "పెన్షన్",
+        "ప్రభుత్వ", "ప్రభుత్వ పథకాలు", "సహాయం", "అర్హత",
+        "योजना", "योजनाएं", "सब्सिडी", "ऋण", "सरकारी", "सरकारी योजना",
+        "ಯೋಜನೆ", "ಯೋಜನೆಗಳು", "ಸಬ್ಸಿಡಿ", "ಸಾಲ", "ಸರ್ಕಾರಿ",
+      ],
+      intent: "scheme",
+    },
+    {
+      keywords: [
+        "crop", "plant", "seed", "harvest", "fertilizer", "pest", "disease",
+        "irrigation", "water", "soil", "spray", "insect", "weed",
+        "panta", "pantalu", "gobbara", "kita", "roga", "bale", "neeru",
+        "పంట", "పంటలు", "విత్తనాలు", "ఎరువులు", "పురుగు", "వ్యాధి", "నీరు",
+        "నీటిపారుదల", "మందు", "పంటల సలహా", "సాగు", "పొలం",
+        "फसल", "बीज", "उर्वरक", "कीट", "रोग", "सिंचाई", "पानी", "खेती",
+        "ಬೆಳೆ", "ಬೀಜ", "ಗೊಬ್ಬರ", "ಕೀಟ", "ರೋಗ", "ನೀರು", "ನೀರಾವರಣ",
+      ],
+      intent: "crop_advice",
+    },
+    {
+      keywords: [
+        "hello", "hi", "hey", "namaste", "namaskaram", "namaskara",
+        "welcome", "start", "begin",
+        "నమస్కారం", "హలో", "హాయి", "శుభోదయం",
+        "नमस्ते", "हैलो", "हाय", "शुभ प्रभात",
+        "ನಮಸ್ಕಾರ", "ಹಲೋ", "ಹಾಯ್",
+      ],
+      intent: "greeting",
+    },
+    {
+      keywords: ["voice", "audio", "speak", "call", "phone"],
+      intent: "voice_request",
+    },
   ];
+
   for (const item of intents) {
-    if (item.keywords.some((k) => lower.includes(k))) return item.intent;
+    if (item.keywords.some((k) => lower.includes(k.toLowerCase()))) return item.intent;
   }
   return "general";
+}
+
+// Location-aware market prices
+function formatMarketPrices(lang: string, district?: string | null, state?: string | null): string {
+  const locLabel = district ? `${district}${state ? `, ${state}` : ""}` : (state ?? "All India");
+
+  // State-specific crops
+  const stateCrops: Record<string, Array<{ name: { en: string; te: string; hi: string; kn: string }; price: number; trend: string }>> = {
+    "andhra pradesh": [
+      { name: { en: "Rice (Sona Masoori)", te: "బియ్యం (సోనా మసూరి)", hi: "चावल (सोना मसूरी)", kn: "ಅಕ್ಕಿ (ಸೋನಾ ಮಸೂರಿ)" }, price: 2150, trend: "up" },
+      { name: { en: "Chilli (Guntur Sannam)", te: "మిర్చి (గుంటూరు సన్నం)", hi: "मिर्च (गुंटूर सनम)", kn: "ಮೆಣಸು (ಗುಂಟೂರು ಸನ್ನಂ)" }, price: 12000, trend: "stable" },
+      { name: { en: "Turmeric", te: "పసుపు", hi: "हल्दी", kn: "ಅರಿಶಿನ" }, price: 8500, trend: "up" },
+      { name: { en: "Cotton", te: "పత్తి", hi: "कपास", kn: "ಹತ್ತಿ" }, price: 7200, trend: "up" },
+    ],
+    "telangana": [
+      { name: { en: "Rice", te: "బియ్యం", hi: "चावल", kn: "ಅಕ್ಕಿ" }, price: 2180, trend: "up" },
+      { name: { en: "Turmeric (Nizamabad)", te: "పసుపు (నిజామాబాద్)", hi: "हल्दी (निजामाबाद)", kn: "ಅರಿಶಿನ (ನಿಜಾಮಾಬಾದ್)" }, price: 8600, trend: "up" },
+      { name: { en: "Soybean", te: "సోయాబీన్", hi: "सोयाबीन", kn: "ಸೋಯಾಬೀನ್" }, price: 4200, trend: "stable" },
+      { name: { en: "Maize", te: "మొక్కజొన్న", hi: "मक्का", kn: "ಮೆಕ್ಕೆಜೋಳ" }, price: 2100, trend: "stable" },
+    ],
+    "karnataka": [
+      { name: { en: "Rice", te: "బియ్యం", hi: "चावल", kn: "ಅಕ್ಕಿ" }, price: 2280, trend: "stable" },
+      { name: { en: "Coffee (Arabica)", te: "కాఫీ (అరబికా)", hi: "कॉफी (अरबिका)", kn: "ಕಾಫಿ (ಅರಬಿಕಾ)" }, price: 35000, trend: "up" },
+      { name: { en: "Tomato (Kolar)", te: "టమాటో (కోలార్)", hi: "टमाटर (कोलार)", kn: "ಟೊಮೆಟೋ (ಕೋಲಾರ್)" }, price: 2400, trend: "up" },
+      { name: { en: "Groundnut", te: "వేరుశనగ", hi: "मूंगफली", kn: "ಕಡಲೆಕಾಯಿ" }, price: 5900, trend: "up" },
+    ],
+    "maharashtra": [
+      { name: { en: "Wheat", te: "గోధుమలు", hi: "गेहूं", kn: "ಗೋಧಿ" }, price: 2450, trend: "up" },
+      { name: { en: "Soybean", te: "సోయాబీన్", hi: "सोयाबीन", kn: "ಸೋಯಾಬೀನ್" }, price: 4200, trend: "up" },
+      { name: { en: "Onion (Nashik)", te: "ఉల్లిపాయ (నాసిక్)", hi: "प्याज (नासिक)", kn: "ಈರುಳ್ಳಿ (ನಾಸಿಕ್)" }, price: 1800, trend: "down" },
+      { name: { en: "Sugarcane", te: "చెరకు", hi: "गन्ना", kn: "ಕಬ್ಬು" }, price: 340, trend: "stable" },
+    ],
+    "madhya pradesh": [
+      { name: { en: "Wheat (Sharbati)", te: "గోధుమ (షర్బతి)", hi: "गेहूं (शरबती)", kn: "ಗೋಧಿ (ಶರಬತಿ)" }, price: 2600, trend: "stable" },
+      { name: { en: "Soybean", te: "సోయాబీన్", hi: "सोयाबीन", kn: "ಸೋಯಾಬೀನ್" }, price: 4300, trend: "up" },
+      { name: { en: "Maize", te: "మొక్కజొన్న", hi: "मक्का", kn: "ಮೆಕ್ಕೆಜೋಳ" }, price: 2150, trend: "stable" },
+    ],
+    "gujarat": [
+      { name: { en: "Cotton (Shankar-6)", te: "పత్తి (శంకర్-6)", hi: "कपास (शंकर-6)", kn: "ಹತ್ತಿ (ಶಂಕರ್-6)" }, price: 6800, trend: "down" },
+      { name: { en: "Groundnut", te: "వేరుశనగ", hi: "मूंगफली", kn: "ಕಡಲೆಕಾಯಿ" }, price: 6000, trend: "stable" },
+      { name: { en: "Wheat", te: "గోధుమలు", hi: "गेहूं", kn: "ಗೋಧಿ" }, price: 2480, trend: "stable" },
+    ],
+  };
+
+  const normState = (state ?? "").toLowerCase().trim();
+  const crops = stateCrops[normState] ?? stateCrops["andhra pradesh"];
+  const langKey = lang === "telugu" ? "te" : lang === "hindi" ? "hi" : lang === "kannada" ? "kn" : "en";
+
+  const trendEmoji = (t: string) => t === "up" ? "⬆️" : t === "down" ? "⬇️" : "➡️";
+
+  const headers: Record<string, string> = {
+    english: `💰 *Market Prices*\n📍 ${locLabel}\n\n`,
+    hindi: `💰 *बाजार भाव*\n📍 ${locLabel}\n\n`,
+    telugu: `💰 *మార్కెట్ ధరలు*\n📍 ${locLabel}\n\n`,
+    kannada: `💰 *ಬಜಾರ ಬೆಲೆಗಳು*\n📍 ${locLabel}\n\n`,
+  };
+
+  const footers: Record<string, string> = {
+    english: `\n✅ Prices trending upward. Good time to sell!`,
+    hindi: `\n✅ भाव बढ़ रहे हैं। बेचने का अच्छा समय!`,
+    telugu: `\n✅ ధరలు పెరుగుతున్నాయి. అమ్మడానికి మంచి సమయం!`,
+    kannada: `\n✅ ಬೆಲೆ ಏರಿಕೆಯಾಗುತ್ತಿದೆ. ಮಾರಾಟಕ್ಕೆ ಒಳ್ಳೆಯ ಸಮಯ!`,
+  };
+
+  let body = "";
+  for (const c of crops) {
+    body += `• ${c.name[langKey]}\n  ₹${c.price.toLocaleString("en-IN")}/quintal ${trendEmoji(c.trend)}\n`;
+  }
+
+  return (headers[lang] ?? headers.english) + body + (footers[lang] ?? footers.english);
 }
 
 async function generateAIResponse(intent: string, lang: string, district?: string | null, state?: string | null): Promise<string> {
@@ -306,42 +431,153 @@ async function generateAIResponse(intent: string, lang: string, district?: strin
     return await getWeatherResponse(district, state, lang);
   }
 
+  // If market_price intent, generate location-aware prices
+  if (intent === "market_price") {
+    return formatMarketPrices(lang, district, state);
+  }
+
   const responses: Record<string, Record<string, string>> = {
     weather: {
-      english: "Here's the weather forecast for your area:\n\nToday: 32°C, Humidity 65%, Rain probability 20%\nTomorrow: 30°C, Rain probability 45%\n\nLight rain expected tomorrow afternoon. Good conditions for field work today.",
-      hindi: "आपके क्षेत्र का मौसम:\n\nआज: 32°C, नमी 65%, बारिश की संभावना 20%\nकल: 30°C, बारिश की संभावना 45%\n\nकल दोपहर में हल्की बारिश की आशंका है।",
-      telugu: "మీ ప్రాంతం వాతావరణ సమాచారం:\n\nఈరోజు: 32°C, తేగోవత 65%, వర్షం అవకాశం 20%\nరేపు: 30°C, వర్షం అవకాశం 45%\n\nరేపు మధ్యాహ్నం జల్ల వాన సంభవం ఉంది.",
-      kannada: "ನಿಮ್ಮ ಪ್ರದೇಶದ ಹವಾಮಾನ:\n\nಇವತ್ತು: 32°C, ಆರ್ದ್ರತೆ 65%, ಮಳೆ ಸಂಭವನೀಯತೆ 20%\nನಾಳೆ: 30°C, ಮಳೆ ಸಂಭವನೀಯತೆ 45%\n\nನಾಳೆ ಮಧ್ಯಾಹ್ನ ಸೌಮ್ಯ ಮಳೆ ಸಾಧ್ಯತೆ ಇದೆ.",
-    },
-    market_price: {
-      english: "Current market prices:\n\nRice: INR 2,150/quintal\nWheat: INR 2,450/quintal\nCotton: INR 6,800/quintal\n\nPrices are trending upward this week. Good time to sell.",
-      hindi: "वर्तमान बाजार भाव:\n\nचावल: INR 2,150/क्विंटल\nगेहूं: INR 2,450/क्विंटल\nकपास: INR 6,800/क्विंटल\n\nइस हफ्ते भाव बढ़ते हुए हैं। बेचने का अच्छा समय है।",
-      telugu: "ప్రస్తుత మార్కెట్ ధరలు:\n\nబియ్యం: INR 2,150/క్వింటాల్\nగోధుమలు: INR 2,450/క్వింటాల్\nపత్తి: INR 6,800/క్వింటాల్\n\nఈ వారం ధరలు పెంచు వద్దున్నాయి.",
-      kannada: "ವर्तಮಾನ ಬಜಾರ ಬೆಲೆ:\n\nಅಕ್ಕಿ: INR 2,150/ಕ್ವಿಂಟಾಲ್\nಗೋಧಿ: INR 2,450/ಕ್ವಿಂಟಾಲ್\nಹತ್ತಿ: INR 6,800/ಕ್ವಿಂಟಾಲ್\n\nಈ ವಾರ ಬೆಲೆ ಏರಿಕೆಯಾಗುತ್ತಿದೆ. ಮಾರಾಟಕ್ಕೆ ಒಳ್ಳೆಯ ಸಮಯ.",
+      english: `🌦️ *Weather Forecast*\n\n` +
+        `• Temperature: 32°C\n` +
+        `• Humidity: 65%\n` +
+        `• Rain Chance: 20%\n` +
+        `• Wind: 12 km/h\n` +
+        `• Condition: Partly cloudy\n\n` +
+        `✅ Good weather for field work today!`,
+      hindi: `🌦️ *मौसम की जानकारी*\n\n` +
+        `• तापमान: 32°C\n` +
+        `• नमी: 65%\n` +
+        `• बारिश की संभावना: 20%\n` +
+        `• हवा: 12 किमी/घंटा\n` +
+        `• स्थिति: आंशिक रूप से बादल\n\n` +
+        `✅ आज खेत के काम के लिए अच्छा मौसम है!`,
+      telugu: `🌦️ *వాతావరణ సమాచారం*\n\n` +
+        `• ఉష్ణోగ్రత: 32°C\n` +
+        `• తేగోవత: 65%\n` +
+        `• వర్షం అవకాశం: 20%\n` +
+        `• గాలి: 12 కి.మీ/గం\n` +
+        `• పరిస్థితి: పాక్షికంగా మేఘావృతం\n\n` +
+        `✅ ఈరోజు పొలం పనికి మంచి వాతావరణం!`,
+      kannada: `🌦️ *ಹವಾಮಾನದ ಮಾಹಿತಿ*\n\n` +
+        `• ತಾಪಮಾನ: 32°C\n` +
+        `• ಆರ್ದ್ರತೆ: 65%\n` +
+        `• ಮಳೆ ಸಂಭವನೀಯತೆ: 20%\n` +
+        `• ಗಾಳಿ: 12 ಕಿ.ಮೀ/ಗಂ\n` +
+        `• ಸ್ಥಿತಿ: ಭಾಗಶಃ ಮೇಘಾವೃತ\n\n` +
+        `✅ ಇವತ್ತು ಕೃಷಿ ಕೆಲಸಕ್ಕೆ ಒಳ್ಳೆಯ ಹವಾಮಾನ!`,
     },
     scheme: {
-      english: "Available government schemes:\n\n1. PM-KISAN: Rs 6,000/year income support\n2. Soil Health Card: Free soil testing\n3. Kisan Credit Card: Low-interest loans at 4%\n4. PMFBY: Crop insurance with 50% subsidy\n\nReply with scheme name for more details.",
-      hindi: "सरकारी योजनाएं:\n\n1. PM-KISAN: Rs 6,000/साल आय सहायता\n2. सॉइल हेल्थ कार्ड: मुफ्त मिट्टी जांच\n3. किसान क्रेडिट कार्ड: 4% पर कम ब्याज ऋण\n4. PMFBY: 50% सब्सिडी के साथ फसल बीमा\n\nऔर जानकारी के लिए योजना का नाम भेजें।",
-      telugu: "ప్రభుత్వ పథకాలు:\n\n1. PM-KISAN: Rs 6,000/సంవత్సరం ఆదాయ మద్దతు\n2. సాయిల్ హెల్త్ కార్డ్: ఉచిత మట్టి పరీక్ష\n3. కిసాన్ క్రెడిట్ కార్డ్: 4% తక్కువ వడ్డీ రుణం\n4. PMFBY: 50% సబ్సిడీతో పంట బీమా\n\nఎక్కువ వివరాలకు పథకం పేరు రిప్లై ఇవ్వండి.",
-      kannada: "ಪ್ರಸ್ತುತ ಸರ್ಕಾರಿ ಯೋಜನೆಗಳು:\n\n1. PM-KISAN: ವರ್ಷಕ್ಕೆ Rs 6,000 ಆಯ ಸಮರ್ಥನೆ\n2. ಸಾಯಿಲ್ ಹೆಲ್ತ್ ಕಾರ್ಡ್: ಉಚಿತ ಮಣ್ಣಿನ ಪರೀಕ್ಷೆ\n3. ಕಿಸಾನ್ ಕ್ರೆಡಿಟ್ ಕಾರ್ಡ್: 4% ಕಡಿಮೆ ಬಡ್ಡದ ಸಾಲ\n4. PMFBY: 50% ಸಬ್ಸಿಡಿಯೊಂದಿಗೆ ಬೆಳೆ ವಿಮೆ\n\nಹೆಚ್ಚು ಮಾಹಿತಿಗೆ ಯೋಜನೆಯ ಹೆಸರು ರಿಪ್ಲೈ ಕೊಡಿ.",
+      english: `📋 *Government Schemes*\n\n` +
+        `• PM-KISAN: ₹6,000/year income support\n` +
+        `• Soil Health Card: Free soil testing\n` +
+        `• Kisan Credit Card: 4% interest loans\n` +
+        `• PMFBY: 50% subsidy crop insurance\n\n` +
+        `Reply with scheme name for more details.`,
+      hindi: `📋 *सरकारी योजनाएं*\n\n` +
+        `• PM-KISAN: ₹6,000/साल आय सहायता\n` +
+        `• सॉइल हेल्थ कार्ड: मुफ्त मिट्टी जांच\n` +
+        `• किसान क्रेडिट कार्ड: 4% ब्याज ऋण\n` +
+        `• PMFBY: 50% सब्सिडी फसल बीमा\n\n` +
+        `योजना का नाम भेजें और जानकारी पाएं।`,
+      telugu: `📋 *ప్రభుత్వ పథకాలు*\n\n` +
+        `• PM-KISAN: ₹6,000/సంవత్సరం ఆదాయ మద్దతు\n` +
+        `• సాయిల్ హెల్త్ కార్డ్: ఉచిత మట్టి పరీక్ష\n` +
+        `• కిసాన్ క్రెడిట్ కార్డ్: 4% వడ్డీ రుణం\n` +
+        `• PMFBY: 50% సబ్సిడీ పంట బీమా\n\n` +
+        `పథకం పేరు రిప్లై ఇస్తే ఎక్కువ వివరాలు తెలుసుకోవచ్చు.`,
+      kannada: `📋 *ಸರ್ಕಾರಿ ಯೋಜನೆಗಳು*\n\n` +
+        `• PM-KISAN: ₹6,000/ವರ್ಷ ಆಯ ಸಮರ್ಥನೆ\n` +
+        `• ಸಾಯಿಲ್ ಹೆಲ್ತ್ ಕಾರ್ಡ್: ಉಚಿತ ಮಣ್ಣಿನ ಪರೀಕ್ಷೆ\n` +
+        `• ಕಿಸಾನ್ ಕ್ರೆಡಿಟ್ ಕಾರ್ಡ್: 4% ಬಡ್ಡದ ಸಾಲ\n` +
+        `• PMFBY: 50% ಸಬ್ಸಿಡಿ ಬೆಳೆ ವಿಮೆ\n\n` +
+        `ಯೋಜನೆಯ ಹೆಸರು ರಿಪ್ಲೈ ಕೊಟ್ಟರೆ ಹೆಚ್ಚು ಮಾಹಿತಿ ದೊರೆಯುತ್ತದೆ.`,
     },
     crop_advice: {
-      english: "For your crop, here are the recommendations:\n\nFertilizer: Apply NPK 20-20-20 at 50kg/acre\nPest Control: Monitor for stem borer. Use neem-based spray if needed.\nIrrigation: Water every 7-10 days depending on soil moisture.\n\nWould you like advice on a specific crop stage?",
-      hindi: "आपकी फसल के लिए सलाह:\n\nउर्वरक: NPK 20-20-20, 50kg/एकड़ लगाएं\nकीट नियंत्रण: स्टेम बोरर की निगरानी रखें। जरूरत हो तो नीम स्प्रे का उपयोग करें।\nसिंचाई: 7-10 दिन में पानी दें।\n\nकिसी विशेष अवस्था की जानकारी चाहिए?",
-      telugu: "మీ పంటకు సిఫార్సులు:\n\nఎరువు: NPK 20-20-20, 50kg/ఎకరం వాడండి\nపురుగు నియంత్రణ: స్టెమ్ బోరర్ కు సిక్షణ చేయండి.\nనీటి పారుదల: 7-10 రోజులకు నీరు ఇవ్వండి.\n\nకొన్ని విశిష్ట దశ గురించి సలహా కావాలా?",
-      kannada: "ನಿಮ್ಮ ಬೆಳೆಗೆ ಸಲಹೆ:\n\nಗೊಬ್ಬರ: NPK 20-20-20, 50kg/ಎಕರೆ ಹಾಕಿ\nಕೀಟ ನಿಯಂತ್ರಣ: ಸ್ಟೆಮ್ ಬೋರರ್ ಗಮನಿಸಿ. ಬೇವು ಆಧಾರಿತ ಸ್ಪ್ರೇ ಬಳಸಿ.\nನೀರಾವರಣ: 7-10 ದಿನಕ್ಕೊಮ್ಮೆ ನೀರು ಹಾಕಿ.\n\nವಿಶಿಷ್ಟ ಬೆಳೆಯ stages ಗೆ ಸಲಹೆ ಬೇಕಾ?",
+      english: `💡 *Farming Advice*\n\n` +
+        `• Fertilizer: Apply NPK 20-20-20 at 50kg/acre\n` +
+        `• Pest Control: Monitor for stem borer\n` +
+        `• Use neem-based spray if needed\n` +
+        `• Irrigation: Water every 7-10 days\n\n` +
+        `Would you like advice on a specific crop stage?`,
+      hindi: `💡 *खेती सलाह*\n\n` +
+        `• उर्वरक: NPK 20-20-20, 50kg/एकड़\n` +
+        `• कीट नियंत्रण: स्टेम बोरर की जांच\n` +
+        `• जरूरत हो तो नीम स्प्रे का उपयोग करें\n` +
+        `• सिंचाई: 7-10 दिन में पानी दें\n\n` +
+        `किसी विशेष अवस्था की जानकारी चाहिए?`,
+      telugu: `💡 *వ్యవసాయ సలహా*\n\n` +
+        `• ఎరువు: NPK 20-20-20, 50kg/ఎకరం\n` +
+        `• పురుగు నియంత్రణ: స్టెమ్ బోరర్ కు సిక్షణ\n` +
+        `• అవసరమైతే వేప ఆధారిత స్ప్రే వాడండి\n` +
+        `• నీటి పారుదల: 7-10 రోజులకు నీరు\n\n` +
+        `కొన్ని విశిష్ట దశ గురించి సలహా కావాలా?`,
+      kannada: `💡 *ಕೃಷಿ ಸಲಹೆ*\n\n` +
+        `• ಗೊಬ್ಬರ: NPK 20-20-20, 50kg/ಎಕರೆ\n` +
+        `• ಕೀಟ ನಿಯಂತ್ರಣ: ಸ್ಟೆಮ್ ಬೋರರ್ ಗಮನಿಸಿ\n` +
+        `• ಅಗತ್ಯವಿದ್ದರೆ ಬೇವು ಆಧಾರಿತ ಸ್ಪ್ರೇ ಬಳಸಿ\n` +
+        `• ನೀರಾವರಣ: 7-10 ದಿನಕ್ಕೊಮ್ಮೆ ನೀರು\n\n` +
+        `ವಿಶಿಷ್ಟ ಬೆಳೆಯ stages ಗೆ ಸಲಹೆ ಬೇಕಾ?`,
     },
     greeting: {
-      english: "Hello! Welcome to AI Farmer Assistant.\n\nI can help you with:\n- Weather updates\n- Market prices\n- Government schemes\n- Farming advice\n\nWhat would you like to know?",
-      hindi: "नमस्ते! AI Farmer Assistant में आपका स्वागत है।\n\nमैं आपकी मदद कर सकता हूं:\n- मौसम की जानकारी\n- बाजार भाव\n- सरकारी योजनाएं\n- खेती सलाह\n\nआप क्या जानना चाहते हैं?",
-      telugu: "నమస్కారం! AI Farmer Assistant కు స్వాగతం.\n\nనేను మీకు సహాయం చేయగల విషయాలు:\n- వాతావరణ సమాచారం\n- మార్కెట్ ధరలు\n- ప్రభుత్వ పథకాలు\n- వ్యవసాయ సలహా\n\nమీకు ఏమి తెలుసుకోవాలని ఉంది?",
-      kannada: "ನಮಸ್ಕಾರ! AI Farmer Assistant ಗೆ ಸ್ವಾಗತ.\n\nನಾನು ನಿಮಗೆ ಸಹಾಯ ಮಾಡಬಹುದಾದ ವಿಷಯಗಳು:\n- ಹವಾಮಾನ ಮಾಹಿತಿ\n- ಬಜಾರ ಬೆಲೆ\n- ಸರ್ಕಾರಿ ಯೋಜನೆಗಳು\n- ಕೃಷಿ ಸಲಹೆ\n\nನೀವು ಯಾವ ಮಾಹಿತಿ ಬೇಕು?",
+      english: `👋 *Welcome to AI Farmer Assistant!*\n\n` +
+        `I can help you with:\n` +
+        `• 🌦️ Weather updates\n` +
+        `• 💰 Market prices\n` +
+        `• 📋 Government schemes\n` +
+        `• 💡 Farming advice\n\n` +
+        `What would you like to know?`,
+      hindi: `🙏 *AI किसान सहायक में स्वागत है!*\n\n` +
+        `मैं आपकी मदद कर सकता हूं:\n` +
+        `• 🌦️ मौसम की जानकारी\n` +
+        `• 💰 बाजार भाव\n` +
+        `• 📋 सरकारी योजनाएं\n` +
+        `• 💡 खेती सलाह\n\n` +
+        `आप क्या जानना चाहते हैं?`,
+      telugu: `🙏 *AI రైతు సహాయకుడుకు స్వాగతం!*\n\n` +
+        `నేను మీకు సహాయం చేయగల విషయాలు:\n` +
+        `• 🌦️ వాతావరణ సమాచారం\n` +
+        `• 💰 మార్కెట్ ధరలు\n` +
+        `• 📋 ప్రభుత్వ పథకాలు\n` +
+        `• 💡 వ్యవసాయ సలహా\n\n` +
+        `మీకు ఏమి తెలుసుకోవాలని ఉంది?`,
+      kannada: `🙏 *AI ಕೃಷಿ ಸಹಾಯಕಕ್ಕೆ ಸ್ವಾಗತ!*\n\n` +
+        `ನಾನು ನಿಮಗೆ ಸಹಾಯ ಮಾಡಬಹುದಾದ ವಿಷಯಗಳು:\n` +
+        `• 🌦️ ಹವಾಮಾನ ಮಾಹಿತಿ\n` +
+        `• 💰 ಬಜಾರ ಬೆಲೆ\n` +
+        `• 📋 ಸರ್ಕಾರಿ ಯೋಜನೆಗಳು\n` +
+        `• 💡 ಕೃಷಿ ಸಲಹೆ\n\n` +
+        `ನೀವು ಯಾವ ಮಾಹಿತಿ ಬೇಕು?`,
     },
     general: {
-      english: "I understand. I'm here to help farmers with weather, market prices, government schemes, and farming advice.\n\nWhat specific information do you need?",
-      hindi: "मैं समझ गया। मैं किसानों की मदद के लिए यहां हूं।\n\nमौसम, बाजार भाव, सरकारी योजनाएं, और खेती सलाह।\n\nआपको किस विशेष जानकारी की जरूरत है?",
-      telugu: "అర్థమైంది. నేను రైతులకు సహాయం చేయడానికి ఉన్నాను.\n\nవాతావరణం, మార్కెట్ ధరలు, ప్రభుత్వ పథకాలు, వ్యవసాయ సలహా.\n\nమీకు ఏమి విశిష్ట సమాచారం కావాలి?",
-      kannada: "ಅರ್ಥವಾಯಿತು. ನಾನು ರೈತರಿಗೆ ಸಹಾಯ ಮಾಡಲು ಇಲ್ಲಿದ್ದೇನೆ.\n\nಹವಾಮಾನ, ಬಜಾರ ಬೆಲೆ, ಸರ್ಕಾರಿ ಯೋಜನೆಗಳು, ಕೃಷಿ ಸಲಹೆ.\n\nನಿಮಗೆ ಯಾವ ವಿಶೇಷ ಮಾಹಿತಿ ಬೇಕು?",
+      english: `🤖 *AI Farmer Assistant*\n\n` +
+        `I can help you with:\n` +
+        `• 🌦️ Weather updates\n` +
+        `• 💰 Market prices\n` +
+        `• 📋 Government schemes\n` +
+        `• 💡 Farming advice\n\n` +
+        `Please send your question!`,
+      hindi: `🤖 *AI किसान सहायक*\n\n` +
+        `मैं आपकी मदद कर सकता हूं:\n` +
+        `• 🌦️ मौसम की जानकारी\n` +
+        `• 💰 बाजार भाव\n` +
+        `• 📋 सरकारी योजनाएं\n` +
+        `• 💡 खेती सलाह\n\n` +
+        `कृपया अपना सवाल भेजें!`,
+      telugu: `🤖 *AI రైతు సహాయకుడు*\n\n` +
+        `నేను మీకు సహాయం చేయగల విషయాలు:\n` +
+        `• 🌦️ వాతావరణ సమాచారం\n` +
+        `• 💰 మార్కెట్ ధరలు\n` +
+        `• 📋 ప్రభుత్వ పథకాలు\n` +
+        `• 💡 వ్యవసాయ సలహా\n\n` +
+        `దయచేసి మీ ప్రశ్నను పంపండి!`,
+      kannada: `🤖 *AI ಕೃಷಿ ಸಹಾಯಕ*\n\n` +
+        `ನಾನು ನಿಮಗೆ ಸಹಾಯ ಮಾಡಬಹುದಾದ ವಿಷಯಗಳು:\n` +
+        `• 🌦️ ಹವಾಮಾನ ಮಾಹಿತಿ\n` +
+        `• 💰 ಬಜಾರ ಬೆಲೆ\n` +
+        `• 📋 ಸರ್ಕಾರಿ ಯೋಜನೆಗಳು\n` +
+        `• 💡 ಕೃಷಿ ಸಲಭೆ\n\n` +
+        `ದಯವಿಟ್ಟು ನಿಮ್ಮ ಪ್ರಶ್ನೆ ಕಳುಹಿಸಿ!`,
     },
   };
 
