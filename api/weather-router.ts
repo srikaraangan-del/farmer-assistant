@@ -290,10 +290,11 @@ export const weatherRouter = createRouter({
   farmerPincodes: publicQuery.query(async () => {
     const db = getDb();
     // Get unique non-null pincodes from farmers with their location info
+    // Use MAX for district/state to comply with ONLY_FULL_GROUP_BY
     const rows = await db.select({
       pincode: farmers.pincode,
-      district: farmers.district,
-      state: farmers.state,
+      district: sql<string>`MAX(${farmers.district})`,
+      state: sql<string>`MAX(${farmers.state})`,
       farmerCount: sql<number>`COUNT(*)`,
     }).from(farmers)
       .where(sql`${farmers.pincode} IS NOT NULL AND ${farmers.pincode} != ''`)
