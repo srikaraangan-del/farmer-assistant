@@ -121,10 +121,21 @@ function getSchemes(lang: string): string {
   return schemes[lang] ?? schemes.english;
 }
 
+// Normalize phone: remove +, spaces, dashes — keep only digits
+function normalizePhone(phone: string): string {
+  return phone.replace(/\D/g, "").trim();
+}
+
 // Send WhatsApp message
 async function sendWhatsAppMessage(toPhoneNumber: string, message: string): Promise<boolean> {
   if (!WHATSAPP_TOKEN || !WHATSAPP_PHONE_ID) {
     console.warn("[Briefings] Cannot send: Missing WHATSAPP_ACCESS_TOKEN or WHATSAPP_PHONE_NUMBER_ID");
+    return false;
+  }
+  // Normalize: WhatsApp API needs digits only, no + or spaces
+  const normalizedTo = normalizePhone(toPhoneNumber);
+  if (normalizedTo.length < 10) {
+    console.error(`[Briefings] Invalid phone: "${toPhoneNumber}" → "${normalizedTo}"`);
     return false;
   }
   try {
@@ -135,7 +146,7 @@ async function sendWhatsAppMessage(toPhoneNumber: string, message: string): Prom
       body: JSON.stringify({
         messaging_product: "whatsapp",
         recipient_type: "individual",
-        to: toPhoneNumber,
+        to: normalizedTo,
         type: "text",
         text: { body: message },
       }),

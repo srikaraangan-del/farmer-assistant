@@ -68,22 +68,30 @@ app.post("/api/webhook/whatsapp", async (c) => {
   }
 });
 
+// Normalize phone number: remove +, spaces, dashes — keep only digits
+function normalizePhone(phone: string): string {
+  return phone.replace(/\D/g, "").trim();
+}
+
 // Process incoming WhatsApp message
 async function processIncomingMessage(phoneNumber: string, message: string, contentType: string) {
   const db = getDb();
 
-  // 1. Find or create farmer
-  let farmer = await db.select().from(farmers).where(eq(farmers.phoneNumber, phoneNumber)).limit(1);
+  // Normalize phone number before lookup
+  const normalizedPhone = normalizePhone(phoneNumber);
+
+  // 1. Find or create farmer (using normalized phone)
+  let farmer = await db.select().from(farmers).where(eq(farmers.phoneNumber, normalizedPhone)).limit(1);
 
   let farmerId: number;
   if (!farmer[0]) {
     const result = await db.insert(farmers).values({
-      phoneNumber,
+      phoneNumber: normalizedPhone,
       preferredLanguage: "english",
       isActive: true,
     });
     farmerId = Number(result[0].insertId);
-    console.log(`[WhatsApp] New farmer registered: ${phoneNumber}`);
+    console.log(`[WhatsApp] New farmer registered: ${normalizedPhone}`);
   } else {
     farmerId = farmer[0].id;
   }
@@ -148,6 +156,13 @@ async function sendWhatsAppMessage(toPhoneNumber: string, message: string) {
     return;
   }
 
+  // Normalize phone: remove +, spaces, dashes — WhatsApp API needs digits only
+  const normalizedTo = normalizePhone(toPhoneNumber);
+  if (normalizedTo.length < 10) {
+    console.error(`[WhatsApp] Invalid phone number: ${toPhoneNumber} (normalized: ${normalizedTo})`);
+    return;
+  }
+
   try {
     const url = `https://graph.facebook.com/v18.0/${WHATSAPP_PHONE_ID}/messages`;
     const response = await fetch(url, {
@@ -159,7 +174,7 @@ async function sendWhatsAppMessage(toPhoneNumber: string, message: string) {
       body: JSON.stringify({
         messaging_product: "whatsapp",
         recipient_type: "individual",
-        to: toPhoneNumber,
+        to: normalizedTo,
         type: "text",
         text: { body: message },
       }),
@@ -168,13 +183,13 @@ async function sendWhatsAppMessage(toPhoneNumber: string, message: string) {
     const result = await response.json();
 
     if (!response.ok) {
-      console.error("[WhatsApp] Failed to send message:", JSON.stringify(result));
+      console.error(`[WhatsApp] Failed to send to ${normalizedTo}:`, JSON.stringify(result));
       return;
     }
 
-    console.log(`[WhatsApp] Message sent to ${toPhoneNumber}: ${message.substring(0, 50)}...`);
+    console.log(`[WhatsApp] Message sent to ${normalizedTo}: ${message.substring(0, 50)}...`);
   } catch (err: any) {
-    console.error("[WhatsApp] Error sending message:", err.message);
+    console.error(`[WhatsApp] Error sending message to ${normalizedTo}:`, err.message);
   }
 }
 

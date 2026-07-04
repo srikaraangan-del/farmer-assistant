@@ -4,6 +4,11 @@ import { getDb } from "./queries/connection";
 import { farmers, conversations, messages, dailyBriefings, analyticsEvents } from "@db/schema";
 import { eq, like, and, desc, sql, count } from "drizzle-orm";
 
+// Normalize phone: remove +, spaces, dashes — keep only digits
+function normalizePhone(phone: string): string {
+  return phone.replace(/\D/g, "").trim();
+}
+
 export const farmersRouter = createRouter({
   list: publicQuery
     .input(
@@ -83,7 +88,7 @@ export const farmersRouter = createRouter({
       const result = await db
         .select()
         .from(farmers)
-        .where(eq(farmers.phoneNumber, input.phoneNumber))
+        .where(eq(farmers.phoneNumber, normalizePhone(input.phoneNumber)))
         .limit(1);
       return result[0] ?? null;
     }),
@@ -106,8 +111,9 @@ export const farmersRouter = createRouter({
     )
     .mutation(async ({ input }) => {
       const db = getDb();
-      const result = await db.insert(farmers).values(input);
-      return { id: Number(result[0].insertId), ...input };
+      const normalizedInput = { ...input, phoneNumber: normalizePhone(input.phoneNumber) };
+      const result = await db.insert(farmers).values(normalizedInput);
+      return { id: Number(result[0].insertId), ...normalizedInput };
     }),
 
   update: publicQuery
@@ -212,11 +218,13 @@ export const farmersRouter = createRouter({
       let skipped = 0;
 
       for (const row of input) {
+        const normalizedPhone = normalizePhone(row.phoneNumber);
+
         // Skip if phone number already exists
         const existing = await db
           .select()
           .from(farmers)
-          .where(eq(farmers.phoneNumber, row.phoneNumber))
+          .where(eq(farmers.phoneNumber, normalizedPhone))
           .limit(1);
 
         if (existing.length > 0) {
@@ -225,7 +233,7 @@ export const farmersRouter = createRouter({
         }
 
         await db.insert(farmers).values({
-          phoneNumber: row.phoneNumber,
+          phoneNumber: normalizedPhone,
           name: row.name || null,
           preferredLanguage: row.preferredLanguage,
           location: row.location || null,
