@@ -242,10 +242,19 @@ export const briefingsRouter = createRouter({
         `${t.tipLabel}\n${getCropTip(lang, farmer.primaryCrop)}\n\n` +
         `${"─".repeat(28)}\n${t.helpText}\n${t.poweredBy}`;
 
-      // 2. Send via WhatsApp
-      const sent = await sendWhatsAppMessage(farmer.phoneNumber, message);
+      // 2. Validate phone before sending
+      const normalizedPhone = normalizePhone(farmer.phoneNumber);
+      console.log(`[Briefings] Send to farmer ${input.farmerId}: phone="${farmer.phoneNumber}" normalized="${normalizedPhone}" lang=${lang}`);
+      if (normalizedPhone.length < 10) {
+        console.error(`[Briefings] Invalid phone number for farmer ${input.farmerId}: "${farmer.phoneNumber}"`);
+        return { error: `Invalid phone number: "${farmer.phoneNumber}". Must be at least 10 digits.`, farmer: { id: farmer.id, name: farmer.name, phoneNumber: farmer.phoneNumber }, status: "failed", sentAt: null, message: "" };
+      }
 
-      // 3. Log to database
+      // 3. Send via WhatsApp
+      const sent = await sendWhatsAppMessage(farmer.phoneNumber, message);
+      console.log(`[Briefings] Send result for farmer ${input.farmerId}: ${sent ? "SENT" : "FAILED"}`);
+
+      // 4. Log to database
       const now = new Date();
       const result = await db.insert(dailyBriefings).values({
         farmerId: input.farmerId,
@@ -283,7 +292,14 @@ export const briefingsRouter = createRouter({
           `${t.weatherLabel}: 32°C | 65% | ${t.rainLabel}: ${rainChance}%\n${rainChance > 50 ? t.carryUmbrella : t.goodWeather}\n\n` +
           `${t.marketLabel}: Rice ₹2,150/q\n${t.schemesLabel}: PM-KISAN ₹6,000/yr\n${t.tipLabel}: ${getCropTip(lang, farmer.primaryCrop).substring(0, 80)}...\n\n${t.helpText}\n${t.poweredBy}`;
 
-        const sent = await sendWhatsAppMessage(farmer.phoneNumber, message);
+        const normalizedPhone = normalizePhone(farmer.phoneNumber);
+        console.log(`[Briefings] Broadcast to farmer ${farmer.id}: phone="${farmer.phoneNumber}" normalized="${normalizedPhone}"`);
+        let sent = false;
+        if (normalizedPhone.length >= 10) {
+          sent = await sendWhatsAppMessage(farmer.phoneNumber, message);
+        } else {
+          console.error(`[Briefings] Invalid phone for farmer ${farmer.id}: "${farmer.phoneNumber}"`);
+        }
 
         await db.insert(dailyBriefings).values({
           farmerId: farmer.id, scheduledAt: now, sentAt: sent ? now : null,

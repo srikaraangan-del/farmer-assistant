@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { trpc } from "@/providers/trpc";
+import { toast } from "sonner";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -22,8 +23,32 @@ export default function DailyBriefings() {
   const { data: preview, isLoading: previewLoading } = trpc.briefings.generate.useQuery(
     { farmerId: selectedFarmerId! }, { enabled: !!selectedFarmerId }
   );
-  const sendMutation = trpc.briefings.send.useMutation({ onSuccess: () => { utils.briefings.list.invalidate(); utils.briefings.stats.invalidate(); } });
-  const sendAllMutation = trpc.briefings.sendToAll.useMutation({ onSuccess: () => { utils.briefings.list.invalidate(); utils.briefings.stats.invalidate(); } });
+  const sendMutation = trpc.briefings.send.useMutation({
+    onSuccess: (data) => {
+      if ("error" in data && data.error) {
+        toast.error("Send failed", { description: String(data.error) });
+      } else if (data.status === "sent") {
+        toast.success("Briefing sent!", { description: `Message delivered to ${data.farmer?.name ?? data.farmer?.phoneNumber ?? "farmer"}` });
+      } else {
+        toast.error("WhatsApp delivery failed", { description: "Check server logs or WhatsApp token" });
+      }
+      utils.briefings.list.invalidate();
+      utils.briefings.stats.invalidate();
+    },
+    onError: (err) => {
+      toast.error("Send failed", { description: err.message });
+    },
+  });
+  const sendAllMutation = trpc.briefings.sendToAll.useMutation({
+    onSuccess: (data) => {
+      toast.success(`Broadcast complete!`, { description: `${data.sent} sent, ${data.failed} failed` });
+      utils.briefings.list.invalidate();
+      utils.briefings.stats.invalidate();
+    },
+    onError: (err) => {
+      toast.error("Broadcast failed", { description: err.message });
+    },
+  });
 
   return (
     <div className="space-y-6">
