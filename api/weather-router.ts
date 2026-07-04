@@ -4,17 +4,52 @@ import { getDb } from "./queries/connection";
 import { weatherCache, pincodes, farmers } from "@db/schema";
 import { eq, and, desc, count, sql } from "drizzle-orm";
 
-// Pincode geocoding via Open-Meteo
-async function geocodePincode(pincode: string): Promise<{ lat: number; lon: number; name: string } | null> {
+// Pincode geocoding — try India Post API first, fallback to Open-Meteo district search
+async function geocodePincode(pincode: string): Promise<{ lat: number; lon: number; name: string; district?: string; state?: string } | null> {
+  // 1. Try India Post API (best for Indian pincodes)
+  try {
+    const res = await fetch(`https://api.postalpincode.in/pincode/${encodeURIComponent(pincode)}`, { timeout: 8000 } as any);
+    const data = await res.json();
+    if (Array.isArray(data) && data[0]?.PostOffice?.length > 0) {
+      const po = data[0].PostOffice[0];
+      // Use district name for geocoding since India Post doesn't give lat/lon
+      const district = po.District;
+      const state = po.State;
+      if (district && state) {
+        // Geocode the district/state to get lat/lon
+        const geo = await geocodeDistrict(district, state);
+        if (geo) {
+          return { lat: geo.lat, lon: geo.lon, name: po.Name || district, district, state };
+        }
+      }
+    }
+  } catch (e) { console.error("[WeatherRouter] India Post API error:", e); }
+
+  // 2. Fallback: try Open-Meteo direct pincode search
   try {
     const res = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(pincode)}&count=3&language=en&format=json`);
     const data = await res.json();
     if (data.results && data.results.length > 0) {
       const india = data.results.find((r: any) => r.country === "India");
       const best = india ?? data.results[0];
+      return { lat: best.latitude, lon: best.longitude, name: best.name, district: best.admin1, state: best.country };
+    }
+  } catch (e) { console.error("[WeatherRouter] Open-Meteo pincode geocode error:", e); }
+
+  return null;
+}
+
+// Geocode district + state via Open-Meteo
+async function geocodeDistrict(district: string, state: string): Promise<{ lat: number; lon: number; name: string } | null> {
+  try {
+    const res = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(district + " " + state)}&count=3&language=en&format=json`);
+    const data = await res.json();
+    if (data.results && data.results.length > 0) {
+      const india = data.results.find((r: any) => r.country === "India" || r.country_code === "IN");
+      const best = india ?? data.results[0];
       return { lat: best.latitude, lon: best.longitude, name: best.name };
     }
-  } catch (e) { console.error("[WeatherRouter] Pincode geocode error:", e); }
+  } catch (e) { console.error("[WeatherRouter] District geocode error:", e); }
   return null;
 }
 
@@ -176,23 +211,37 @@ export const weatherRouter = createRouter({
         }
       }
 
-      // 2. Geocode pincode
-      const geo = await geocodePincode(pincode);
+      // 2. Find farmers with this pincode to get district/state context
+      const farmerMatches = await db.select({ district: farmers.district, state: farmers.state })
+        .from(farmers)
+        .where(eq(farmers.pincode, pincode))
+        .limit(1);
+      const farmerContext = farmerMatches[0];
+
+      // 3. Geocode pincode (with farmer district/state as fallback)
+      let geo = await geocodePincode(pincode);
+      if (!geo && farmerContext?.district) {
+        console.log(`[WeatherRouter] Pincode ${pincode} geocoding failed, trying district: ${farmerContext.district}`);
+        const districtGeo = await geocodeDistrict(farmerContext.district, farmerContext.state || "");
+        if (districtGeo) {
+          geo = { ...districtGeo, district: farmerContext.district, state: farmerContext.state || undefined };
+        }
+      }
       if (!geo) {
-        return { error: `Could not find location for pincode "${pincode}". Please check the pincode.`, data: cached[0] ?? null };
+        return { error: `Could not find location for pincode "${pincode}". Please check the pincode or ensure district/state is set for farmers with this pincode.`, data: cached[0] ?? null };
       }
 
-      // 3. Fetch live weather
+      // 4. Fetch live weather
       const weather = await fetchWeatherByCoords(geo.lat, geo.lon, geo.name);
       if (!weather) {
         return { error: "Could not fetch weather data. Using cached data if available.", data: cached[0] ?? null };
       }
 
-      // 4. Save to cache
+      // 5. Save to cache
       const result = await db.insert(weatherCache).values({
         location: geo.name,
-        district: geo.name,
-        state: null,
+        district: geo.district ?? geo.name,
+        state: geo.state ?? null,
         pincode: pincode,
         temperature: weather.temperature,
         humidity: weather.humidity,

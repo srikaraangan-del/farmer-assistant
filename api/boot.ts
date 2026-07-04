@@ -202,15 +202,36 @@ async function sendWhatsAppMessage(toPhoneNumber: string, message: string) {
 
 // Geocode a pincode using Open-Meteo
 async function geocodePincode(pincode: string): Promise<{ lat: number; lon: number; name: string; district?: string; state?: string } | null> {
+  const cleanPin = pincode.trim();
+
+  // 1. Try India Post API (best for Indian pincodes)
   try {
-    const cleanPin = pincode.trim();
-    // Try Open-Meteo geocoding with pincode
+    const res = await fetch(`https://api.postalpincode.in/pincode/${encodeURIComponent(cleanPin)}`);
+    const data = await res.json();
+    if (Array.isArray(data) && data[0]?.PostOffice?.length > 0) {
+      const po = data[0].PostOffice[0];
+      const district = po.District;
+      const state = po.State;
+      console.log(`[Pincode] India Post API: ${cleanPin} → ${po.Name}, ${district}, ${state}`);
+      if (district && state) {
+        // Geocode the district to get lat/lon
+        const geo = await geocodeLocation(district, state);
+        if (geo) {
+          return { lat: geo.lat, lon: geo.lon, name: po.Name || district, district, state };
+        }
+      }
+    }
+  } catch (e) {
+    console.error(`[Pincode] India Post API error for "${cleanPin}":`, e);
+  }
+
+  // 2. Fallback: Open-Meteo direct pincode search
+  try {
     const res = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(cleanPin)}&count=5&language=en&format=json`);
     const data = await res.json();
-    console.log(`[Pincode] Geocode "${cleanPin}":`, JSON.stringify(data.results?.map((r: any) => ({ name: r.name, admin1: r.admin1, country: r.country })) ?? "no results"));
+    console.log(`[Pincode] Open-Meteo geocode "${cleanPin}":`, JSON.stringify(data.results?.map((r: any) => ({ name: r.name, admin1: r.admin1, country: r.country })) ?? "no results"));
 
     if (data.results && data.results.length > 0) {
-      // Prefer India results
       const indiaResult = data.results.find((r: any) => r.country === "India");
       const best = indiaResult ?? data.results[0];
       return {
@@ -222,8 +243,10 @@ async function geocodePincode(pincode: string): Promise<{ lat: number; lon: numb
       };
     }
   } catch (e) {
-    console.error("[Pincode] Geocoding error:", e);
+    console.error(`[Pincode] Open-Meteo geocoding error for "${cleanPin}":`, e);
   }
+
+  console.log(`[Pincode] Could not geocode pincode "${cleanPin}"`);
   return null;
 }
 
