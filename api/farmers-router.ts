@@ -101,23 +101,27 @@ export const farmersRouter = createRouter({
   create: publicQuery
     .input(
       z.object({
-        phoneNumber: z.string().min(10).max(20),
-        name: z.string().optional(),
-        preferredLanguage: z.enum(["telugu", "hindi", "english"]).default("english"),
-        location: z.string().optional(),
-        district: z.string().optional(),
-        state: z.string().optional(),
-        pincode: z.string().optional(),
+        phoneNumber: z.string().min(10, "Phone number must be at least 10 digits").regex(/^\+?[\d\s-]+$/, "Phone number must contain only digits"),
+        name: z.string().min(1, "Name is required").max(100, "Name must be under 100 characters"),
+        preferredLanguage: z.enum(["telugu", "hindi", "kannada", "english"]).default("english"),
+        location: z.string().max(200).optional(),
+        district: z.string().min(1, "District is required").max(100),
+        state: z.string().min(1, "State is required").max(100),
+        pincode: z.string().regex(/^\d{6}$/, "Pincode must be exactly 6 digits").optional().or(z.literal("")),
         latitude: z.number().optional(),
         longitude: z.number().optional(),
-        landSize: z.number().optional(),
-        primaryCrop: z.string().optional(),
-        secondaryCrops: z.string().optional(),
+        landSize: z.number().positive("Land size must be a positive number").optional(),
+        primaryCrop: z.string().max(100).optional(),
+        secondaryCrops: z.string().max(200).optional(),
       })
     )
     .mutation(async ({ input }) => {
       const db = getDb();
-      const normalizedInput = { ...input, phoneNumber: normalizePhone(input.phoneNumber) };
+      const normalizedInput = {
+        ...input,
+        phoneNumber: normalizePhone(input.phoneNumber),
+        pincode: input.pincode || null,
+      };
       const result = await db.insert(farmers).values(normalizedInput);
       return { id: Number(result[0].insertId), ...normalizedInput };
     }),
@@ -126,23 +130,25 @@ export const farmersRouter = createRouter({
     .input(
       z.object({
         id: z.number(),
-        name: z.string().optional(),
-        preferredLanguage: z.enum(["telugu", "hindi", "english"]).optional(),
-        location: z.string().optional(),
-        district: z.string().optional(),
-        state: z.string().optional(),
-        pincode: z.string().optional(),
+        name: z.string().min(1, "Name is required").max(100).optional(),
+        preferredLanguage: z.enum(["telugu", "hindi", "kannada", "english"]).optional(),
+        location: z.string().max(200).optional(),
+        district: z.string().min(1, "District is required").max(100).optional(),
+        state: z.string().min(1, "State is required").max(100).optional(),
+        pincode: z.string().regex(/^\d{6}$/, "Pincode must be exactly 6 digits").optional().or(z.literal("")),
         latitude: z.number().optional(),
         longitude: z.number().optional(),
-        landSize: z.number().optional(),
-        primaryCrop: z.string().optional(),
-        secondaryCrops: z.string().optional(),
+        landSize: z.number().positive("Land size must be a positive number").optional(),
+        primaryCrop: z.string().max(100).optional(),
+        secondaryCrops: z.string().max(200).optional(),
         isActive: z.boolean().optional(),
       })
     )
     .mutation(async ({ input }) => {
       const db = getDb();
       const { id, ...data } = input;
+      // Convert empty pincode string to null
+      if (data.pincode === "") data.pincode = null as any;
       await db.update(farmers).set(data).where(eq(farmers.id, id));
       const updated = await db
         .select()

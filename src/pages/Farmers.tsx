@@ -67,6 +67,8 @@ export default function Farmers() {
     primaryCrop: "",
   });
 
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
+
   const utils = trpc.useUtils();
   const { data, isLoading } = trpc.farmers.list.useQuery({
     search: search || undefined,
@@ -147,7 +149,59 @@ export default function Farmers() {
     });
   };
 
+  const validateForm = (): boolean => {
+    const errors: Record<string, string> = {};
+    const digitsOnly = form.phoneNumber.replace(/\D/g, "");
+
+    // Phone validation (required for both create and edit)
+    if (!editingId) {
+      if (!form.phoneNumber.trim()) {
+        errors.phoneNumber = "Phone number is required";
+      } else if (digitsOnly.length < 10) {
+        errors.phoneNumber = "Phone number must have at least 10 digits";
+      } else if (!/^\+?[\d\s-]+$/.test(form.phoneNumber)) {
+        errors.phoneNumber = "Phone number must contain only digits";
+      }
+    }
+
+    // Name validation
+    if (!form.name.trim()) {
+      errors.name = "Name is required";
+    }
+
+    // District validation
+    if (!form.district.trim()) {
+      errors.district = "District is required";
+    }
+
+    // State validation
+    if (!form.state.trim()) {
+      errors.state = "State is required";
+    }
+
+    // Pincode validation (6 digits if provided)
+    if (form.pincode && form.pincode.length > 0 && form.pincode.length !== 6) {
+      errors.pincode = "Pincode must be exactly 6 digits";
+    }
+
+    // Land size validation (positive number if provided)
+    if (form.landSize) {
+      const ls = parseFloat(form.landSize);
+      if (isNaN(ls) || ls <= 0) {
+        errors.landSize = "Land size must be a positive number";
+      }
+    }
+
+    setFormErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
+
   const handleSubmit = () => {
+    if (!validateForm()) {
+      toast.error("Please fix the validation errors");
+      return;
+    }
+
     if (editingId) {
       updateMutation.mutate({
         id: editingId,
@@ -427,19 +481,31 @@ export default function Farmers() {
                 <Input
                   placeholder="+91 98765 43210"
                   value={form.phoneNumber}
-                  onChange={(e) =>
-                    setForm({ ...form, phoneNumber: e.target.value })
-                  }
+                  onChange={(e) => {
+                    setForm({ ...form, phoneNumber: e.target.value });
+                    if (formErrors.phoneNumber) setFormErrors({ ...formErrors, phoneNumber: "" });
+                  }}
                   disabled={!!editingId}
+                  className={formErrors.phoneNumber ? "border-red-500 focus-visible:ring-red-500" : ""}
                 />
+                {formErrors.phoneNumber && (
+                  <p className="text-red-500 text-xs">{formErrors.phoneNumber}</p>
+                )}
               </div>
               <div className="space-y-2">
-                <Label>Name</Label>
+                <Label>Name *</Label>
                 <Input
                   placeholder="Farmer name"
                   value={form.name}
-                  onChange={(e) => setForm({ ...form, name: e.target.value })}
+                  onChange={(e) => {
+                    setForm({ ...form, name: e.target.value });
+                    if (formErrors.name) setFormErrors({ ...formErrors, name: "" });
+                  }}
+                  className={formErrors.name ? "border-red-500 focus-visible:ring-red-500" : ""}
                 />
+                {formErrors.name && (
+                  <p className="text-red-500 text-xs">{formErrors.name}</p>
+                )}
               </div>
               <div className="space-y-2">
                 <Label>Preferred Language</Label>
@@ -462,24 +528,34 @@ export default function Farmers() {
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <Label>District</Label>
+                  <Label>District *</Label>
                   <Input
                     placeholder="District"
                     value={form.district}
-                    onChange={(e) =>
-                      setForm({ ...form, district: e.target.value })
-                    }
+                    onChange={(e) => {
+                      setForm({ ...form, district: e.target.value });
+                      if (formErrors.district) setFormErrors({ ...formErrors, district: "" });
+                    }}
+                    className={formErrors.district ? "border-red-500 focus-visible:ring-red-500" : ""}
                   />
+                  {formErrors.district && (
+                    <p className="text-red-500 text-xs">{formErrors.district}</p>
+                  )}
                 </div>
                 <div className="space-y-2">
-                  <Label>State</Label>
+                  <Label>State *</Label>
                   <Input
                     placeholder="State"
                     value={form.state}
-                    onChange={(e) =>
-                      setForm({ ...form, state: e.target.value })
-                    }
+                    onChange={(e) => {
+                      setForm({ ...form, state: e.target.value });
+                      if (formErrors.state) setFormErrors({ ...formErrors, state: "" });
+                    }}
+                    className={formErrors.state ? "border-red-500 focus-visible:ring-red-500" : ""}
                   />
+                  {formErrors.state && (
+                    <p className="text-red-500 text-xs">{formErrors.state}</p>
+                  )}
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-4">
@@ -488,11 +564,16 @@ export default function Farmers() {
                   <Input
                     placeholder="e.g. 500001"
                     value={form.pincode}
-                    onChange={(e) =>
-                      setForm({ ...form, pincode: e.target.value.replace(/\D/g, "").slice(0, 6) })
-                    }
+                    onChange={(e) => {
+                      setForm({ ...form, pincode: e.target.value.replace(/\D/g, "").slice(0, 6) });
+                      if (formErrors.pincode) setFormErrors({ ...formErrors, pincode: "" });
+                    }}
                     maxLength={6}
+                    className={formErrors.pincode ? "border-red-500 focus-visible:ring-red-500" : ""}
                   />
+                  {formErrors.pincode && (
+                    <p className="text-red-500 text-xs">{formErrors.pincode}</p>
+                  )}
                 </div>
                 <div className="space-y-2">
                   <Label>Land Size (acres)</Label>
@@ -500,10 +581,17 @@ export default function Farmers() {
                     type="number"
                     placeholder="e.g. 5"
                     value={form.landSize}
-                    onChange={(e) =>
-                      setForm({ ...form, landSize: e.target.value })
-                    }
+                    min={0}
+                    step={0.1}
+                    onChange={(e) => {
+                      setForm({ ...form, landSize: e.target.value });
+                      if (formErrors.landSize) setFormErrors({ ...formErrors, landSize: "" });
+                    }}
+                    className={formErrors.landSize ? "border-red-500 focus-visible:ring-red-500" : ""}
                   />
+                  {formErrors.landSize && (
+                    <p className="text-red-500 text-xs">{formErrors.landSize}</p>
+                  )}
                 </div>
                 <div className="space-y-2">
                   <Label>Primary Crop</Label>
