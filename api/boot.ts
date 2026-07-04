@@ -69,8 +69,14 @@ app.post("/api/webhook/whatsapp", async (c) => {
 });
 
 // Normalize phone number: remove +, spaces, dashes — keep only digits
+// Auto-add India country code (91) if 10 digits
 function normalizePhone(phone: string): string {
-  return phone.replace(/\D/g, "").trim();
+  let cleaned = phone.replace(/\D/g, "").trim();
+  // If 10 digits, assume Indian number and add 91
+  if (cleaned.length === 10) {
+    cleaned = "91" + cleaned;
+  }
+  return cleaned;
 }
 
 // Process incoming WhatsApp message

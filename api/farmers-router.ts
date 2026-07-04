@@ -5,8 +5,13 @@ import { farmers, conversations, messages, dailyBriefings, analyticsEvents } fro
 import { eq, like, and, desc, sql, count } from "drizzle-orm";
 
 // Normalize phone: remove +, spaces, dashes — keep only digits
+// Auto-add India country code (91) if 10 digits
 function normalizePhone(phone: string): string {
-  return phone.replace(/\D/g, "").trim();
+  let cleaned = phone.replace(/\D/g, "").trim();
+  if (cleaned.length === 10) {
+    cleaned = "91" + cleaned;
+  }
+  return cleaned;
 }
 
 export const farmersRouter = createRouter({
