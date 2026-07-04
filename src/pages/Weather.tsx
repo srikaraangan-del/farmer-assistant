@@ -52,6 +52,9 @@ export default function Weather() {
   // Get all pincodes with weather
   const { data: pincodesData } = trpc.weather.pincodes.useQuery();
 
+  // Get pincodes from farmers table
+  const { data: farmerPincodesData, isLoading: farmerPincodesLoading } = trpc.weather.farmerPincodes.useQuery();
+
   const handlePincodeSearch = () => {
     if (!pincodeSearch.trim() || pincodeSearch.trim().length !== 6) {
       toast.error("Please enter a valid 6-digit pincode");
@@ -217,6 +220,74 @@ export default function Weather() {
                         {pw.rainProbability}%
                       </span>
                     </div>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Farmer Pincodes */}
+      {farmerPincodesData && farmerPincodesData.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <MapPin className="h-4 w-4" />
+              Farmer Pincodes
+              <Badge variant="secondary" className="ml-2 text-xs">
+                {farmerPincodesData.length} unique
+              </Badge>
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+              {farmerPincodesData.map((fp) => (
+                <Card
+                  key={fp.pincode}
+                  className={`cursor-pointer transition-colors hover:bg-accent ${activePincode === fp.pincode ? "ring-2 ring-primary" : ""}`}
+                  onClick={() => {
+                    setActivePincode(fp.pincode!);
+                    setPincodeSearch(fp.pincode!);
+                  }}
+                >
+                  <CardContent className="p-4">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="font-semibold text-sm flex items-center gap-2">
+                        <MapPinned className="h-4 w-4 text-blue-600" />
+                        {fp.pincode}
+                      </span>
+                      <Badge variant="secondary" className="text-xs">
+                        {fp.farmerCount} farmer{fp.farmerCount > 1 ? "s" : ""}
+                      </Badge>
+                    </div>
+                    <p className="text-xs text-muted-foreground mb-2">
+                      {fp.district}{fp.state ? `, ${fp.state}` : ""}
+                    </p>
+                    {fp.hasWeather ? (
+                      <div className="flex items-center gap-4 text-sm">
+                        <span className="flex items-center gap-1">
+                          <Thermometer className="h-3 w-3 text-orange-500" />
+                          {fp.temperature}°C
+                        </span>
+                        <span className="flex items-center gap-1">
+                          <Droplets className="h-3 w-3 text-blue-500" />
+                          {fp.humidity}%
+                        </span>
+                        <span className="flex items-center gap-1">
+                          <Umbrella className="h-3 w-3 text-purple-500" />
+                          {fp.rainProbability}%
+                        </span>
+                        <Badge variant="outline" className="text-xs">
+                          {fp.weatherCondition}
+                        </Badge>
+                      </div>
+                    ) : (
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs text-muted-foreground">No weather data yet</span>
+                        <Badge variant="outline" className="text-xs text-orange-500">Click to fetch</Badge>
+                      </div>
+                    )}
                   </CardContent>
                 </Card>
               ))}

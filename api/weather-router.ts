@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { createRouter, publicQuery } from "./middleware";
 import { getDb } from "./queries/connection";
-import { weatherCache, pincodes } from "@db/schema";
+import { weatherCache, pincodes, farmers } from "@db/schema";
 import { eq, and, desc, count, sql } from "drizzle-orm";
 
 // Pincode geocoding via Open-Meteo
@@ -235,6 +235,44 @@ export const weatherRouter = createRouter({
     });
 
     return unique;
+  }),
+
+  // Get unique pincodes from farmers table (for Weather page "Farmer Pincodes" section)
+  farmerPincodes: publicQuery.query(async () => {
+    const db = getDb();
+    // Get unique non-null pincodes from farmers with their location info
+    const rows = await db.select({
+      pincode: farmers.pincode,
+      district: farmers.district,
+      state: farmers.state,
+      farmerCount: sql<number>`COUNT(*)`,
+    }).from(farmers)
+      .where(sql`${farmers.pincode} IS NOT NULL AND ${farmers.pincode} != ''`)
+      .groupBy(farmers.pincode);
+
+    // For each farmer pincode, try to get latest cached weather
+    const result = [];
+    for (const row of rows) {
+      const cached = await db.select().from(weatherCache)
+        .where(eq(weatherCache.pincode, row.pincode!))
+        .orderBy(desc(weatherCache.createdAt))
+        .limit(1);
+
+      result.push({
+        pincode: row.pincode,
+        district: row.district,
+        state: row.state,
+        farmerCount: row.farmerCount,
+        hasWeather: cached.length > 0,
+        temperature: cached[0]?.temperature ?? null,
+        humidity: cached[0]?.humidity ?? null,
+        rainProbability: cached[0]?.rainProbability ?? null,
+        weatherCondition: cached[0]?.weatherCondition ?? null,
+        weatherCachedAt: cached[0]?.createdAt ?? null,
+      });
+    }
+
+    return result;
   }),
 
   get: publicQuery
