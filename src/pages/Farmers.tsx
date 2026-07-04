@@ -62,6 +62,7 @@ export default function Farmers() {
     location: "",
     district: "",
     state: "",
+    pincode: "",
     landSize: "",
     primaryCrop: "",
   });
@@ -136,10 +137,11 @@ export default function Farmers() {
     setForm({
       phoneNumber: "",
       name: "",
-      preferredLanguage: "english",
+      preferredLanguage: "english" as Language,
       location: "",
       district: "",
       state: "",
+      pincode: "",
       landSize: "",
       primaryCrop: "",
     });
@@ -154,6 +156,7 @@ export default function Farmers() {
         location: form.location || undefined,
         district: form.district || undefined,
         state: form.state || undefined,
+        pincode: form.pincode || undefined,
         landSize: form.landSize ? parseFloat(form.landSize) : undefined,
         primaryCrop: form.primaryCrop || undefined,
       });
@@ -165,6 +168,7 @@ export default function Farmers() {
         location: form.location || undefined,
         district: form.district || undefined,
         state: form.state || undefined,
+        pincode: form.pincode || undefined,
         landSize: form.landSize ? parseFloat(form.landSize) : undefined,
         primaryCrop: form.primaryCrop || undefined,
       });
@@ -238,7 +242,7 @@ export default function Farmers() {
       return;
     }
 
-    const headers = ["phoneNumber", "name", "preferredLanguage", "location", "district", "state", "landSize", "primaryCrop", "secondaryCrops", "isActive", "totalInteractions", "createdAt"];
+    const headers = ["phoneNumber", "name", "preferredLanguage", "location", "district", "state", "pincode", "landSize", "primaryCrop", "secondaryCrops", "isActive", "totalInteractions", "createdAt"];
     const rows = data.map((f) => [
       f.phoneNumber,
       f.name ?? "",
@@ -246,6 +250,7 @@ export default function Farmers() {
       f.location ?? "",
       f.district ?? "",
       f.state ?? "",
+      f.pincode ?? "",
       f.landSize?.toString() ?? "",
       f.primaryCrop ?? "",
       f.secondaryCrops ?? "",
@@ -258,11 +263,11 @@ export default function Farmers() {
 
   // Download CSV template
   const handleDownloadTemplate = () => {
-    const headers = ["phoneNumber", "name", "preferredLanguage", "location", "district", "state", "landSize", "primaryCrop", "secondaryCrops"];
+    const headers = ["phoneNumber", "name", "preferredLanguage", "location", "district", "state", "pincode", "landSize", "primaryCrop", "secondaryCrops"];
     const rows = [
-      ["919876543210", "Ramesh Kumar", "hindi", "Village Badarpur", "Gurgaon", "Haryana", "5", "Wheat", "Mustard,Barley"],
-      ["919876543211", "Lakshmi Devi", "telugu", "Ramapuram", "Guntur", "Andhra Pradesh", "3.5", "Rice", "Cotton"],
-      ["919876543212", "Rajanna Gowda", "kannada", "Hassan", "Hassan", "Karnataka", "10", "Coffee", "Pepper,Cardamom"],
+      ["919876543210", "Ramesh Kumar", "hindi", "Village Badarpur", "Gurgaon", "Haryana", "122001", "5", "Wheat", "Mustard,Barley"],
+      ["919876543211", "Lakshmi Devi", "telugu", "Ramapuram", "Guntur", "Andhra Pradesh", "522001", "3.5", "Rice", "Cotton"],
+      ["919876543212", "Rajanna Gowda", "kannada", "Hassan", "Hassan", "Karnataka", "573201", "10", "Coffee", "Pepper,Cardamom"],
     ];
     downloadCSV("farmer_import_template.csv", headers, rows);
   };
@@ -350,6 +355,7 @@ export default function Farmers() {
       location: farmer.location ?? "",
       district: farmer.district ?? "",
       state: farmer.state ?? "",
+      pincode: farmer.pincode ?? "",
       landSize: farmer.landSize?.toString() ?? "",
       primaryCrop: farmer.primaryCrop ?? "",
     });
@@ -478,6 +484,17 @@ export default function Farmers() {
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
+                  <Label>Pincode</Label>
+                  <Input
+                    placeholder="e.g. 500001"
+                    value={form.pincode}
+                    onChange={(e) =>
+                      setForm({ ...form, pincode: e.target.value.replace(/\D/g, "").slice(0, 6) })
+                    }
+                    maxLength={6}
+                  />
+                </div>
+                <div className="space-y-2">
                   <Label>Land Size (acres)</Label>
                   <Input
                     type="number"
@@ -560,6 +577,7 @@ export default function Farmers() {
                     <th className="text-left px-4 py-3 font-medium">Name</th>
                     <th className="text-left px-4 py-3 font-medium">Phone</th>
                     <th className="text-left px-4 py-3 font-medium">Location</th>
+                    <th className="text-left px-4 py-3 font-medium">Pincode</th>
                     <th className="text-left px-4 py-3 font-medium">Language</th>
                     <th className="text-left px-4 py-3 font-medium">Crop</th>
                     <th className="text-left px-4 py-3 font-medium">Status</th>
@@ -584,6 +602,12 @@ export default function Farmers() {
                           <MapPin className="h-3.5 w-3.5 text-muted-foreground" />
                           {farmer.district ?? "-"}
                           {farmer.state ? `, ${farmer.state}` : ""}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-1.5">
+                          <MapPin className="h-3.5 w-3.5 text-muted-foreground" />
+                          {farmer.pincode ?? "-"}
                         </div>
                       </td>
                       <td className="px-4 py-3">

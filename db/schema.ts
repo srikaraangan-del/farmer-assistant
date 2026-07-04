@@ -67,6 +67,7 @@ export const farmers = mysqlTable(
     location: varchar("location", { length: 255 }),
     district: varchar("district", { length: 255 }),
     state: varchar("state", { length: 255 }),
+    pincode: varchar("pincode", { length: 10 }),
     latitude: float("latitude"),
     longitude: float("longitude"),
     landSize: float("land_size"), // in acres
@@ -250,6 +251,7 @@ export const weatherCache = mysqlTable(
     location: varchar("location", { length: 255 }).notNull(),
     district: varchar("district", { length: 255 }),
     state: varchar("state", { length: 255 }),
+    pincode: varchar("pincode", { length: 10 }),
     latitude: float("latitude"),
     longitude: float("longitude"),
     temperature: float("temperature"), // Celsius
@@ -276,6 +278,32 @@ export const weatherCache = mysqlTable(
 
 export type WeatherCache = typeof weatherCache.$inferSelect;
 export type InsertWeatherCache = typeof weatherCache.$inferInsert;
+
+// ============ PINCODES REFERENCE ============
+// Stores geocoded pincodes so we don't geocode the same pin repeatedly
+
+export const pincodes = mysqlTable(
+  "pincodes",
+  {
+    id: serial("id").primaryKey(),
+    pincode: varchar("pincode", { length: 10 }).notNull().unique(),
+    location: varchar("location", { length: 255 }),
+    district: varchar("district", { length: 255 }),
+    state: varchar("state", { length: 255 }),
+    latitude: float("latitude").notNull(),
+    longitude: float("longitude").notNull(),
+    country: varchar("country", { length: 100 }).default("India"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  },
+  (table) => [
+    index("pincode_idx").on(table.pincode),
+    index("pin_district_idx").on(table.district),
+  ]
+);
+
+export type Pincode = typeof pincodes.$inferSelect;
+export type InsertPincode = typeof pincodes.$inferInsert;
 
 // ============ CROP KNOWLEDGE BASE ============
 

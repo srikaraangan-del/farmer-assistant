@@ -9,7 +9,7 @@ import { env } from "./lib/env";
 import { createOAuthCallbackHandler } from "./kimi/auth";
 import { Paths } from "@contracts/constants";
 import { getDb } from "./queries/connection";
-import { farmers, messages, conversations } from "@db/schema";
+import { farmers, messages, conversations, pincodes } from "@db/schema";
 import { eq, desc, sql } from "drizzle-orm";
 
 const app = new Hono<{ Bindings: HttpBindings }>();
@@ -118,11 +118,12 @@ async function processIncomingMessage(phoneNumber: string, message: string, cont
   // 3. Detect intent
   const intent = detectIntent(message);
 
-  // 4. Generate AI response (async for weather with location)
+  // 4. Generate AI response (async for weather with location + pincode)
   const lang = farmer[0]?.preferredLanguage ?? "english";
   const farmerDistrict = farmer[0]?.district;
   const farmerState = farmer[0]?.state;
-  const aiResponse = await generateAIResponse(intent, lang, farmerDistrict, farmerState);
+  const farmerPincode = farmer[0]?.pincode;
+  const aiResponse = await generateAIResponse(intent, lang, farmerDistrict, farmerState, farmerPincode);
 
   // 5. Save farmer message
   await db.insert(messages).values({
@@ -199,6 +200,67 @@ async function sendWhatsAppMessage(toPhoneNumber: string, message: string) {
   }
 }
 
+// Geocode a pincode using Open-Meteo
+async function geocodePincode(pincode: string): Promise<{ lat: number; lon: number; name: string; district?: string; state?: string } | null> {
+  try {
+    const cleanPin = pincode.trim();
+    // Try Open-Meteo geocoding with pincode
+    const res = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(cleanPin)}&count=5&language=en&format=json`);
+    const data = await res.json();
+    console.log(`[Pincode] Geocode "${cleanPin}":`, JSON.stringify(data.results?.map((r: any) => ({ name: r.name, admin1: r.admin1, country: r.country })) ?? "no results"));
+
+    if (data.results && data.results.length > 0) {
+      // Prefer India results
+      const indiaResult = data.results.find((r: any) => r.country === "India");
+      const best = indiaResult ?? data.results[0];
+      return {
+        lat: best.latitude,
+        lon: best.longitude,
+        name: best.name,
+        district: best.admin1,
+        state: best.admin1,
+      };
+    }
+  } catch (e) {
+    console.error("[Pincode] Geocoding error:", e);
+  }
+  return null;
+}
+
+// Cached pincode lookup from DB
+async function lookupCachedPincode(pincode: string): Promise<{ lat: number; lon: number; district?: string; state?: string } | null> {
+  try {
+    const db = getDb();
+    const cached = await db.select().from(pincodes).where(eq(pincodes.pincode, pincode.trim())).limit(1);
+    if (cached.length > 0) {
+      console.log(`[Pincode] Cache hit for "${pincode}": ${cached[0].location}`);
+      return { lat: cached[0].latitude, lon: cached[0].longitude, district: cached[0].district ?? undefined, state: cached[0].state ?? undefined };
+    }
+  } catch { /* table may not exist yet */ }
+  return null;
+}
+
+// Save pincode to cache
+async function cachePincode(pincode: string, lat: number, lon: number, location?: string, district?: string, state?: string) {
+  try {
+    const db = getDb();
+    await db.insert(pincodes).values({
+      pincode: pincode.trim(),
+      latitude: lat,
+      longitude: lon,
+      location: location ?? null,
+      district: district ?? null,
+      state: state ?? null,
+    });
+    console.log(`[Pincode] Cached "${pincode}" → ${location}`);
+  } catch (e: any) {
+    // Duplicate key is fine - ignore
+    if (!e.message?.includes("Duplicate")) {
+      console.error("[Pincode] Cache error:", e.message);
+    }
+  }
+}
+
 // Geocode location to lat/lon using Open-Meteo
 async function geocodeLocation(district: string, state: string): Promise<{ lat: number; lon: number; name: string } | null> {
   try {
@@ -220,9 +282,30 @@ async function geocodeLocation(district: string, state: string): Promise<{ lat: 
 }
 
 // Fetch weather from Open-Meteo
-async function fetchWeather(district: string, state: string): Promise<{ temp: number; humidity: number; rainProb: number; condition: string; forecast: string } | null> {
+async function fetchWeather(district: string, state: string, pincode?: string | null): Promise<{ temp: number; humidity: number; rainProb: number; condition: string; forecast: string; location: string } | null> {
   try {
-    const geo = await geocodeLocation(district, state);
+    // Try pincode-based geocoding first
+    let geo: { lat: number; lon: number; name: string; district?: string; state?: string } | null = null;
+
+    if (pincode) {
+      // 1. Check cache first
+      const cached = await lookupCachedPincode(pincode);
+      if (cached) {
+        geo = { lat: cached.lat, lon: cached.lon, name: cached.district ?? district, district: cached.district, state: cached.state ?? state };
+      } else {
+        // 2. Geocode pincode via API
+        geo = await geocodePincode(pincode);
+        if (geo) {
+          await cachePincode(pincode, geo.lat, geo.lon, geo.name, geo.district, geo.state);
+        }
+      }
+      console.log(`[Weather] Using pincode "${pincode}" → ${geo?.name ?? "fallback to district"}`);
+    }
+
+    // 3. Fallback to district/state if pincode geocoding failed
+    if (!geo) {
+      geo = await geocodeLocation(district, state);
+    }
     if (!geo) {
       console.error(`[Weather] Could not geocode: ${district}, ${state}`);
       return null;
@@ -273,6 +356,7 @@ async function fetchWeather(district: string, state: string): Promise<{ temp: nu
       rainProb,
       condition,
       forecast: `High: ${Math.round(daily.temperature_2m_max[0])}°C, Low: ${Math.round(daily.temperature_2m_min[0])}°C`,
+      location: geo?.name ?? district,
     };
   } catch (e: any) {
     console.error("[Weather] Fetch error:", e.message);
@@ -281,9 +365,9 @@ async function fetchWeather(district: string, state: string): Promise<{ temp: nu
 }
 
 // Format weather response in farmer's language
-async function getWeatherResponse(district: string, state: string, lang: string): Promise<string> {
-  console.log(`[Weather] Getting weather for ${district}, ${state} in ${lang}`);
-  const weather = await fetchWeather(district, state);
+async function getWeatherResponse(district: string, state: string, lang: string, pincode?: string | null): Promise<string> {
+  console.log(`[Weather] Getting weather for ${district}, ${state}${pincode ? `, pincode:${pincode}` : ""} in ${lang}`);
+  const weather = await fetchWeather(district, state, pincode);
   if (!weather) {
     const fallbacks: Record<string, string> = {
       english: `Weather for ${district}:\n\nUnable to fetch live data. Please try again later.`,
@@ -295,14 +379,14 @@ async function getWeatherResponse(district: string, state: string, lang: string)
   }
 
   const templates: Record<string, (w: typeof weather, loc: string) => string> = {
-    english: (w, loc) => `Weather for ${loc}:\n\nNow: ${w.temp}°C, ${w.condition}\nHumidity: ${w.humidity}%\nRain chance: ${w.rainProb}%\nToday: ${w.forecast}\n\n${w.rainProb > 50 ? "Carry umbrella! Rain likely." : "Good weather for farm work today."}`,
-    hindi: (w, loc) => `${loc} का मौसम:\n\nअभी: ${w.temp}°C, ${w.condition}\nनमी: ${w.humidity}%\nबारिश की संभावना: ${w.rainProb}%\nआज: ${w.forecast}\n\n${w.rainProb > 50 ? "छाता ले जाएं! बारिश की संभावना है।" : "आज खेती के लिए अच्छा मौसम है।"}`,
-    telugu: (w, loc) => `${loc} వాతావరణం:\n\nఇప్పుడు: ${w.temp}°C, ${w.condition}\nతేగోవత: ${w.humidity}%\nవర్షం అవకాశం: ${w.rainProb}%\nఈరోజు: ${w.forecast}\n\n${w.rainProb > 50 ? "గొడ్డ తీసుకొని వెళ్ళండి! వర్షం అవకాశం ఉంది." : "ఈరోజు రైతు పనికి మంచి వాతావరణం."}`,
-    kannada: (w, loc) => `${loc} ಹವಾಮಾನ:\n\nಈಗ: ${w.temp}°C, ${w.condition}\nಆರ್ದ್ರತೆ: ${w.humidity}%\nಮಳೆ ಸಂಭವನೀಯತೆ: ${w.rainProb}%\nಇವತ್ತು: ${w.forecast}\n\n${w.rainProb > 50 ? "ಕುಡುರೆ ತೆಗೆದುಕೊಂಡು ಹೋಗಿ! ಮಳೆ ಸಾಧ್ಯತೆ ಇದೆ." : "ಇವತ್ತು ಕೃಷಿ ಕೆಲಸಕ್ಕೆ ಒಳ್ಳೆಯ ಹವಾಮಾನ."}`,
+    english: (w, loc) => `🌦️ *Weather for ${loc}*\n\n• Now: ${w.temp}°C, ${w.condition}\n• Humidity: ${w.humidity}%\n• Rain chance: ${w.rainProb}%\n• Today: ${w.forecast}\n\n${w.rainProb > 50 ? "☂️ Carry umbrella! Rain likely." : "✅ Good weather for farm work today!"}`,
+    hindi: (w, loc) => `🌦️ *${loc} का मौसम*\n\n• अभी: ${w.temp}°C, ${w.condition}\n• नमी: ${w.humidity}%\n• बारिश की संभावना: ${w.rainProb}%\n• आज: ${w.forecast}\n\n${w.rainProb > 50 ? "☂️ छाता ले जाएं! बारिश की संभावना है।" : "✅ आज खेती के लिए अच्छा मौसम है!"}`,
+    telugu: (w, loc) => `🌦️ *${loc} వాతావరణం*\n\n• ఇప్పుడు: ${w.temp}°C, ${w.condition}\n• తేగోవత: ${w.humidity}%\n• వర్షం అవకాశం: ${w.rainProb}%\n• ఈరోజు: ${w.forecast}\n\n${w.rainProb > 50 ? "☂️ గొడ్డ తీసుకొని వెళ్ళండి! వర్షం అవకాశం ఉంది." : "✅ ఈరోజు రైతు పనికి మంచి వాతావరణం!"}`,
+    kannada: (w, loc) => `🌦️ *${loc} ಹವಾಮಾನ*\n\n• ಈಗ: ${w.temp}°C, ${w.condition}\n• ಆರ್ದ್ರತೆ: ${w.humidity}%\n• ಮಳೆ ಸಂಭವನೀಯತೆ: ${w.rainProb}%\n• ಇವತ್ತು: ${w.forecast}\n\n${w.rainProb > 50 ? "☂️ ಕುಡುರೆ ತೆಗೆದುಕೊಂಡು ಹೋಗಿ! ಮಳೆ ಸಾಧ್ಯತೆ ಇದೆ." : "✅ ಇವತ್ತು ಕೃಷಿ ಕೆಲಸಕ್ಕೆ ಒಳ್ಳೆಯ ಹವಾಮಾನ!"}`,
   };
 
   const template = templates[lang] ?? templates.english;
-  return template(weather, district);
+  return template(weather, weather.location);
 }
 
 function detectIntent(message: string): string {
@@ -449,7 +533,7 @@ function formatMarketPrices(lang: string, district?: string | null, state?: stri
 async function generateAIResponse(intent: string, lang: string, district?: string | null, state?: string | null): Promise<string> {
   // If weather intent and farmer has location, fetch real weather
   if (intent === "weather" && district && state) {
-    return await getWeatherResponse(district, state, lang);
+    return await getWeatherResponse(district, state, lang, pincode);
   }
 
   // If market_price intent, generate location-aware prices
