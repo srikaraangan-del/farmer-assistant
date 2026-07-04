@@ -4,62 +4,86 @@ import { getDb } from "./queries/connection";
 import { weatherCache, pincodes, farmers } from "@db/schema";
 import { eq, and, desc, count, sql } from "drizzle-orm";
 
-// Pincode geocoding — try India Post API first, fallback to Open-Meteo district search
+// Pincode geocoding — try India Post API first, then town name, then district, then fallback
 async function geocodePincode(pincode: string): Promise<{ lat: number; lon: number; name: string; district?: string; state?: string } | null> {
+  let districtName: string | null = null;
+  let stateName: string | null = null;
+
   // 1. Try India Post API (best for Indian pincodes)
   try {
     console.log(`[WeatherRouter] Trying India Post API for pincode: ${pincode}`);
     const res = await fetch(`https://api.postalpincode.in/pincode/${encodeURIComponent(pincode)}`);
     const data = await res.json();
-    console.log(`[WeatherRouter] India Post response status:`, res.status, `results:`, data?.[0]?.PostOffice?.length ?? 0);
+    console.log(`[WeatherRouter] India Post results:`, data?.[0]?.PostOffice?.length ?? 0);
     if (Array.isArray(data) && data[0]?.PostOffice?.length > 0) {
       const po = data[0].PostOffice[0];
-      const district = po.District;
-      const state = po.State;
-      console.log(`[WeatherRouter] India Post: ${pincode} → PostOffice: ${po.Name}, District: ${district}, State: ${state}`);
-      if (district) {
-        const geo = await geocodeDistrict(district, state || "");
-        if (geo) {
-          console.log(`[WeatherRouter] Successfully geocoded ${pincode} → ${geo.name} (${geo.lat}, ${geo.lon})`);
-          return { lat: geo.lat, lon: geo.lon, name: po.Name || district, district, state };
-        }
+      districtName = po.District;
+      stateName = po.State;
+      console.log(`[WeatherRouter] India Post: ${pincode} → PO: ${po.Name}, District: ${districtName}, State: ${stateName}`);
+
+      // 1a. Try geocoding the POSTOFFICE NAME first (town-level, most accurate)
+      const townGeo = await geocodeLocationName(po.Name);
+      if (townGeo) {
+        console.log(`[WeatherRouter] Town geocode success: ${po.Name} → ${townGeo.name} (${townGeo.lat}, ${townGeo.lon})`);
+        return { lat: townGeo.lat, lon: townGeo.lon, name: po.Name, district: districtName, state: stateName };
       }
-    } else {
-      console.log(`[WeatherRouter] India Post: no PostOffice found for ${pincode}`);
+      console.log(`[WeatherRouter] Town geocode failed for: ${po.Name}`);
     }
   } catch (e) { console.error(`[WeatherRouter] India Post API error for ${pincode}:`, e); }
 
-  // 2. Fallback: try Open-Meteo direct pincode search
+  // 2. Try geocoding the DISTRICT name
+  if (districtName) {
+    console.log(`[WeatherRouter] Trying district geocode: ${districtName}`);
+    const distGeo = await geocodeLocationName(districtName);
+    if (distGeo) {
+      console.log(`[WeatherRouter] District geocode success: ${districtName} → ${distGeo.name} (${distGeo.lat}, ${distGeo.lon})`);
+      return { lat: distGeo.lat, lon: distGeo.lon, name: districtName, district: districtName, state: stateName };
+    }
+    console.log(`[WeatherRouter] District geocode failed for: ${districtName}`);
+  }
+
+  // 3. Fallback: try Open-Meteo direct pincode search
   try {
-    console.log(`[WeatherRouter] Trying Open-Meteo for pincode: ${pincode}`);
+    console.log(`[WeatherRouter] Trying Open-Meteo direct for pincode: ${pincode}`);
     const res = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(pincode)}&count=3&language=en&format=json`);
     const data = await res.json();
-    console.log(`[WeatherRouter] Open-Meteo results:`, data.results?.length ?? 0);
     if (data.results && data.results.length > 0) {
       const india = data.results.find((r: any) => r.country === "India");
       const best = india ?? data.results[0];
       console.log(`[WeatherRouter] Open-Meteo: ${pincode} → ${best.name} (${best.latitude}, ${best.longitude})`);
       return { lat: best.latitude, lon: best.longitude, name: best.name, district: best.admin1, state: best.country };
     }
-  } catch (e) { console.error(`[WeatherRouter] Open-Meteo pincode geocode error for ${pincode}:`, e); }
+  } catch (e) { console.error(`[WeatherRouter] Open-Meteo error for ${pincode}:`, e); }
 
   console.log(`[WeatherRouter] All geocoding failed for pincode: ${pincode}`);
   return null;
 }
 
-// Geocode district via Open-Meteo (district name alone works best)
-async function geocodeDistrict(district: string, _state: string): Promise<{ lat: number; lon: number; name: string } | null> {
+// Generic Open-Meteo geocoder for any location name
+async function geocodeLocationName(name: string): Promise<{ lat: number; lon: number; name: string } | null> {
+  if (!name || name.trim().length < 2) return null;
   try {
-    const res = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(district)}&count=3&language=en&format=json`);
+    const res = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(name.trim())}&count=3&language=en&format=json`);
     const data = await res.json();
-    console.log(`[WeatherRouter] District geocode "${district}":`, JSON.stringify(data.results?.map((r: any) => ({ name: r.name, country: r.country })) ?? "no results"));
     if (data.results && data.results.length > 0) {
       const india = data.results.find((r: any) => r.country === "India");
       const best = india ?? data.results[0];
       return { lat: best.latitude, lon: best.longitude, name: best.name };
     }
-  } catch (e) { console.error("[WeatherRouter] District geocode error:", e); }
+  } catch (e) { /* ignore */ }
   return null;
+}
+
+// Geocode district via Open-Meteo (uses generic geocoder)
+async function geocodeDistrict(district: string, _state: string): Promise<{ lat: number; lon: number; name: string } | null> {
+  console.log(`[WeatherRouter] District geocode "${district}"`);
+  const result = await geocodeLocationName(district);
+  if (result) {
+    console.log(`[WeatherRouter] District geocode success: ${district} → ${result.name} (${result.lat}, ${result.lon})`);
+  } else {
+    console.log(`[WeatherRouter] District geocode failed: ${district}`);
+  }
+  return result;
 }
 
 // Fetch real weather from Open-Meteo by coordinates
