@@ -44,9 +44,9 @@ export default function Weather() {
   const { data, isLoading } = trpc.weather.list.useQuery();
 
   // Get weather by pincode
-  const { data: pincodeWeather, isLoading: pincodeLoading } = trpc.weather.getByPincode.useQuery(
+  const { data: pincodeWeather, isLoading: pincodeLoading, error: pincodeError } = trpc.weather.getByPincode.useQuery(
     { pincode: activePincode! },
-    { enabled: !!activePincode }
+    { enabled: !!activePincode, retry: 1 }
   );
 
   // Get all pincodes with weather
@@ -147,9 +147,30 @@ export default function Weather() {
       </Card>
 
       {/* Pincode Weather Result */}
-      {activePincode && pincodeWeather && (
+      {activePincode && (
         <>
-          {"error" in pincodeWeather && pincodeWeather.error && (
+          {/* Loading */}
+          {pincodeLoading && (
+            <Card>
+              <CardContent className="pt-6 text-center">
+                <RefreshCw className="h-6 w-6 animate-spin mx-auto mb-2 text-muted-foreground" />
+                <p className="text-sm text-muted-foreground">Fetching weather for pincode {activePincode}...</p>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* tRPC Query Error */}
+          {pincodeError && (
+            <Card className="border-red-200 bg-red-50">
+              <CardContent className="pt-6">
+                <p className="text-red-800 font-medium">Failed to fetch weather</p>
+                <p className="text-red-600 text-sm mt-1">{pincodeError.message}</p>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* API returned error */}
+          {pincodeWeather && "error" in pincodeWeather && pincodeWeather.error && (
             <Card className="border-yellow-200 bg-yellow-50">
               <CardContent className="pt-6">
                 <p className="text-yellow-800">{pincodeWeather.error}</p>
@@ -157,7 +178,8 @@ export default function Weather() {
             </Card>
           )}
 
-          {pincodeWeather.data && (
+          {/* Success */}
+          {pincodeWeather && pincodeWeather.data && (
             <Card className="border-blue-200">
               <CardHeader className="bg-blue-50">
                 <CardTitle className="flex items-center justify-between text-base">
@@ -247,8 +269,10 @@ export default function Weather() {
                   key={fp.pincode}
                   className={`cursor-pointer transition-colors hover:bg-accent ${activePincode === fp.pincode ? "ring-2 ring-primary" : ""}`}
                   onClick={() => {
-                    setActivePincode(fp.pincode!);
-                    setPincodeSearch(fp.pincode!);
+                    const pc = fp.pincode!;
+                    setPincodeSearch(pc);
+                    setActivePincode(pc);
+                    utils.weather.getByPincode.invalidate({ pincode: pc });
                   }}
                 >
                   <CardContent className="p-4">
