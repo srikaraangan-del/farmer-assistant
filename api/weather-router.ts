@@ -271,6 +271,8 @@ export const weatherRouter = createRouter({
       }
 
       // 5. Save to cache
+      const now = new Date();
+      const oneHourLater = new Date(now.getTime() + 3600000);
       const result = await db.insert(weatherCache).values({
         location: geo.name,
         district: geo.district ?? geo.name,
@@ -283,6 +285,9 @@ export const weatherRouter = createRouter({
         weatherCondition: weather.condition,
         latitude: geo.lat,
         longitude: geo.lon,
+        forecastDate: now,
+        forecastDays: 0,
+        expiresAt: oneHourLater,
       });
 
       return {
