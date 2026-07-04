@@ -8,44 +8,53 @@ import { eq, and, desc, count, sql } from "drizzle-orm";
 async function geocodePincode(pincode: string): Promise<{ lat: number; lon: number; name: string; district?: string; state?: string } | null> {
   // 1. Try India Post API (best for Indian pincodes)
   try {
-    const res = await fetch(`https://api.postalpincode.in/pincode/${encodeURIComponent(pincode)}`, { timeout: 8000 } as any);
+    console.log(`[WeatherRouter] Trying India Post API for pincode: ${pincode}`);
+    const res = await fetch(`https://api.postalpincode.in/pincode/${encodeURIComponent(pincode)}`);
     const data = await res.json();
+    console.log(`[WeatherRouter] India Post response status:`, res.status, `results:`, data?.[0]?.PostOffice?.length ?? 0);
     if (Array.isArray(data) && data[0]?.PostOffice?.length > 0) {
       const po = data[0].PostOffice[0];
-      // Use district name for geocoding since India Post doesn't give lat/lon
       const district = po.District;
       const state = po.State;
-      if (district && state) {
-        // Geocode the district/state to get lat/lon
-        const geo = await geocodeDistrict(district, state);
+      console.log(`[WeatherRouter] India Post: ${pincode} → PostOffice: ${po.Name}, District: ${district}, State: ${state}`);
+      if (district) {
+        const geo = await geocodeDistrict(district, state || "");
         if (geo) {
+          console.log(`[WeatherRouter] Successfully geocoded ${pincode} → ${geo.name} (${geo.lat}, ${geo.lon})`);
           return { lat: geo.lat, lon: geo.lon, name: po.Name || district, district, state };
         }
       }
+    } else {
+      console.log(`[WeatherRouter] India Post: no PostOffice found for ${pincode}`);
     }
-  } catch (e) { console.error("[WeatherRouter] India Post API error:", e); }
+  } catch (e) { console.error(`[WeatherRouter] India Post API error for ${pincode}:`, e); }
 
   // 2. Fallback: try Open-Meteo direct pincode search
   try {
+    console.log(`[WeatherRouter] Trying Open-Meteo for pincode: ${pincode}`);
     const res = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(pincode)}&count=3&language=en&format=json`);
     const data = await res.json();
+    console.log(`[WeatherRouter] Open-Meteo results:`, data.results?.length ?? 0);
     if (data.results && data.results.length > 0) {
       const india = data.results.find((r: any) => r.country === "India");
       const best = india ?? data.results[0];
+      console.log(`[WeatherRouter] Open-Meteo: ${pincode} → ${best.name} (${best.latitude}, ${best.longitude})`);
       return { lat: best.latitude, lon: best.longitude, name: best.name, district: best.admin1, state: best.country };
     }
-  } catch (e) { console.error("[WeatherRouter] Open-Meteo pincode geocode error:", e); }
+  } catch (e) { console.error(`[WeatherRouter] Open-Meteo pincode geocode error for ${pincode}:`, e); }
 
+  console.log(`[WeatherRouter] All geocoding failed for pincode: ${pincode}`);
   return null;
 }
 
-// Geocode district + state via Open-Meteo
-async function geocodeDistrict(district: string, state: string): Promise<{ lat: number; lon: number; name: string } | null> {
+// Geocode district via Open-Meteo (district name alone works best)
+async function geocodeDistrict(district: string, _state: string): Promise<{ lat: number; lon: number; name: string } | null> {
   try {
-    const res = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(district + " " + state)}&count=3&language=en&format=json`);
+    const res = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(district)}&count=3&language=en&format=json`);
     const data = await res.json();
+    console.log(`[WeatherRouter] District geocode "${district}":`, JSON.stringify(data.results?.map((r: any) => ({ name: r.name, country: r.country })) ?? "no results"));
     if (data.results && data.results.length > 0) {
-      const india = data.results.find((r: any) => r.country === "India" || r.country_code === "IN");
+      const india = data.results.find((r: any) => r.country === "India");
       const best = india ?? data.results[0];
       return { lat: best.latitude, lon: best.longitude, name: best.name };
     }
