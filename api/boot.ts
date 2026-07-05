@@ -42,22 +42,31 @@ app.get("/api/webhook/whatsapp", async (c) => {
 app.post("/api/webhook/whatsapp", async (c) => {
   try {
     const body = await c.req.json();
-    console.log("[WhatsApp] Received webhook:", JSON.stringify(body, null, 2));
 
     const entries = body.entry ?? [];
     for (const entry of entries) {
       const changes = entry.changes ?? [];
       for (const change of changes) {
+        // Skip status receipts (delivered/read) - only process actual messages
+        const statuses = change.value?.statuses ?? [];
+        if (statuses.length > 0) {
+          for (const s of statuses) {
+            console.log(`[WhatsApp] Status: ${s.status} for msg ${s.id?.slice(-8)} to ${s.recipient_id?.slice(-6)}`);
+          }
+          continue; // Don't process statuses as messages
+        }
+
         const messages_data = change.value?.messages ?? [];
+        if (messages_data.length === 0) continue;
+
         for (const msg of messages_data) {
-          const from = msg.from;           // Sender's phone number
-          const type = msg.type ?? "text";   // Message type
+          const from = msg.from;
+          const type = msg.type ?? "text";
 
           let text = "";
           let interactiveId = "";
 
           if (type === "interactive") {
-            // Handle button replies and list selections
             const interactive = msg.interactive;
             if (interactive?.type === "button_reply") {
               interactiveId = interactive.button_reply?.id ?? "";
@@ -68,8 +77,8 @@ app.post("/api/webhook/whatsapp", async (c) => {
             }
             console.log(`[WhatsApp] Interactive reply from ${from}: id=${interactiveId}, title=${text}`);
           } else {
-            // Regular text message
             text = msg.text?.body ?? "";
+            console.log(`[WhatsApp] Text from ${from}: "${text.substring(0, 50)}"`);
           }
 
           if (text || interactiveId) {
