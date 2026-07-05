@@ -175,55 +175,63 @@ async function processIncomingMessage(phoneNumber: string, message: string, cont
     }
   }
 
-  // 4. Generate AI response
-  const lang = farmer[0]?.preferredLanguage ?? "english";
-  const farmerDistrict = farmer[0]?.district;
-  const farmerState = farmer[0]?.state;
-  const farmerPincode = farmer[0]?.pincode;
-  const aiResponse = await generateAIResponse(intent, lang, farmerDistrict, farmerState, farmerPincode, farmer[0]?.primaryCrop);
+  // 4. Generate AI response with full error handling
+  let aiResponse = "";
+  try {
+    const lang = farmer[0]?.preferredLanguage ?? "english";
+    const farmerDistrict = farmer[0]?.district;
+    const farmerState = farmer[0]?.state;
+    const farmerPincode = farmer[0]?.pincode;
+    const farmerCrop = farmer[0]?.primaryCrop;
 
-  // 5. Save farmer message
-  await db.insert(messages).values({
-    conversationId, farmerId, senderType: "farmer",
-    contentType: contentType as "text" | "voice" | "image" | "template",
-    content: message || interactiveId, language: lang, intentDetected: intent,
-  });
+    console.log(`[WhatsApp] Generating response: intent=${intent}, lang=${lang}, district=${farmerDistrict}, state=${farmerState}, hasFarmer=${!!farmer[0]}`);
 
-  // 6. Save AI response
-  await db.insert(messages).values({
-    conversationId, farmerId, senderType: "ai",
-    contentType: "text", content: aiResponse,
-    language: lang, aiResponse, intentDetected: intent,
-  });
+    aiResponse = await generateAIResponse(intent, lang, farmerDistrict, farmerState, farmerPincode, farmerCrop);
+    console.log(`[WhatsApp] Generated response (${aiResponse.length} chars): ${aiResponse.substring(0, 100)}...`);
 
-  // 7. Update conversation
-  await db.update(conversations).set({
-    intent, messageCount: sql`${conversations.messageCount} + 2`, updatedAt: new Date(),
-  }).where(eq(conversations.id, conversationId));
+    // 5. Save farmer message
+    await db.insert(messages).values({
+      conversationId, farmerId, senderType: "farmer",
+      contentType: contentType as "text" | "voice" | "image" | "template",
+      content: message || interactiveId, language: lang, intentDetected: intent,
+    });
 
-  // 8. Update farmer stats
-  await db.update(farmers).set({
-    totalInteractions: sql`${farmers.totalInteractions} + 1`,
-    lastInteractionAt: new Date(), updatedAt: new Date(),
-  }).where(eq(farmers.id, farmerId));
+    // 6. Save AI response
+    await db.insert(messages).values({
+      conversationId, farmerId, senderType: "ai",
+      contentType: "text", content: aiResponse,
+      language: lang, aiResponse, intentDetected: intent,
+    });
 
-  console.log(`[WhatsApp] Processed message from ${phoneNumber}: intent=${intent}, interactive=${interactiveId}`);
+    // 7. Update conversation
+    await db.update(conversations).set({
+      intent, messageCount: sql`${conversations.messageCount} + 2`, updatedAt: new Date(),
+    }).where(eq(conversations.id, conversationId));
 
-  // 9. Send response
-  if (isMenuAction && intent === "language_change") {
-    // Send language selection buttons
-    await sendLanguageMenu(phoneNumber);
-  } else if (isMenuAction) {
-    // For menu items: send response then re-send menu
-    await sendWhatsAppMessage(phoneNumber, aiResponse);
-    await sendMainMenu(phoneNumber, lang);
-  } else if (isNewFarmer) {
-    // New farmer: send welcome + main menu
-    await sendWhatsAppMessage(phoneNumber, aiResponse);
-    await sendMainMenu(phoneNumber, lang);
-  } else {
-    // Regular text message
-    await sendWhatsAppMessage(phoneNumber, aiResponse);
+    // 8. Update farmer stats
+    await db.update(farmers).set({
+      totalInteractions: sql`${farmers.totalInteractions} + 1`,
+      lastInteractionAt: new Date(), updatedAt: new Date(),
+    }).where(eq(farmers.id, farmerId));
+
+    // 9. Send response
+    if (isMenuAction && intent === "language_change") {
+      await sendLanguageMenu(phoneNumber);
+    } else if (isMenuAction) {
+      await sendWhatsAppMessage(phoneNumber, aiResponse);
+      await sendMainMenu(phoneNumber, lang);
+    } else if (isNewFarmer) {
+      await sendWhatsAppMessage(phoneNumber, aiResponse);
+      await sendMainMenu(phoneNumber, lang);
+    } else {
+      await sendWhatsAppMessage(phoneNumber, aiResponse);
+    }
+    console.log(`[WhatsApp] Response sent to ${phoneNumber}: intent=${intent}, menuAction=${isMenuAction}`);
+  } catch (err: any) {
+    console.error(`[WhatsApp] CRITICAL ERROR for ${phoneNumber}:`, err.message, err.stack);
+    // Send error message to farmer so they're not left hanging
+    const errorMsg = `Sorry, there was an error processing your request. Please try again.`;
+    await sendWhatsAppMessage(phoneNumber, errorMsg);
   }
 }
 
@@ -675,13 +683,18 @@ async function fetchWeather(district: string, state: string, pincode?: string | 
 // Format weather response in farmer's language
 async function getWeatherResponse(district: string, state: string, lang: string, pincode?: string | null): Promise<string> {
   console.log(`[Weather] Getting weather for ${district}, ${state}${pincode ? `, pincode:${pincode}` : ""} in ${lang}`);
-  const weather = await fetchWeather(district, state, pincode);
+  let weather = null;
+  try {
+    weather = await fetchWeather(district, state, pincode);
+  } catch (e: any) {
+    console.error(`[Weather] fetchWeather error:`, e.message);
+  }
   if (!weather) {
     const fallbacks: Record<string, string> = {
-      english: `Weather for ${district}:\n\nUnable to fetch live data. Please try again later.`,
-      hindi: `${district} का मौसम:\n\nलाइव डेटा प्राप्त करने में असफल। कृपया बाद में प्रयास करें।`,
-      telugu: `${district} వాతావరణం:\n\nలైవ్ డేటా అందుకోలేకపోయాము. దయచేసి మళ్ళీ ప్రయత్నించండి.`,
-      kannada: `${district} ಹವಾಮಾನ:\n\nಲೈವ್ ಡೇಟಾ ಪಡೆಯಲು ಸಾಧ್ಯವಾಗಿಲ್ಲ. ದಯವಿಟ್ಟು ಮತ್ತೆ ಪ್ರಯತ್ನಿಸಿ.`,
+      english: `🌦️ *Weather for ${district}*\n\nUnable to fetch live data for your area.\n\n• Check your pincode in profile\n• Try again later\n\n_Type "menu" for more options_`,
+      hindi: `🌦️ *${district} का मौसम*\n\nआपके क्षेत्र के लिए लाइव डेटा प्राप्त करने में असफल।\n\n• प्रोफ़ाइल में अपना पिनकोड जांचें\n• बाद में पुनः प्रयास करें\n\n_अधिक विकल्पों के लिए "menu" टाइप करें_`,
+      telugu: `🌦️ *${district} వాతావరణం*\n\nమీ ప్రాంతం కోసం లైవ్ డేటా అందుకోలేకపోయాము.\n\n• ప్రొఫైల్‌లో మీ పిన్‌కోడ్‌ను తనిఖీ చేయండి\n• తర్వాత మళ్ళీ ప్రయత్నించండి\n\n_మరిన్ని ఎంపికల కోసం "menu" టైప్ చేయండి_`,
+      kannada: `🌦️ *${district} ಹವಾಮಾನ*\n\nನಿಮ್ಮ ಪ್ರದೇಶದ ಲೈವ್ ಡೇಟಾ ಪಡೆಯಲು ಸಾಧ್ಯವಾಗಿಲ್ಲ.\n\n• ನಿಮ್ಮ ಪ್ರೊಫೈಲ್‌ನಲ್ಲಿ ಪಿನ್‌ಕೋಡ್ ಪರಿಶೀಲಿಸಿ\n• ನಂತರ ಮತ್ತೆ ಪ್ರಯತ್ನಿಸಿ\n\n_ಹೆಚ್ಚಿನ ಆಯ್ಕೆಗಳಿಗಾಗಿ "menu" ಟೈಪ್ ಮಾಡಿ_`,
     };
     return fallbacks[lang] ?? fallbacks.english;
   }
@@ -962,17 +975,29 @@ async function formatCropAdviceFromDB(lang: string, farmerCrop?: string | null):
 }
 
 async function generateAIResponse(intent: string, lang: string, district?: string | null, state?: string | null, pincode?: string | null, farmerCrop?: string | null): Promise<string> {
+  console.log(`[generateAIResponse] START: intent=${intent}, lang=${lang}, district=${district}, state=${state}, pincode=${pincode}, crop=${farmerCrop}`);
+
   // Normalize intent names from button IDs
   const normalizedIntent = intent === "market_prices" ? "market_price"
     : intent === "government_schemes" ? "scheme"
     : intent === "crop_knowledge" ? "crop_advice"
     : intent;
+  console.log(`[generateAIResponse] normalizedIntent=${normalizedIntent}`);
 
   // 1. Weather — fetch live data from Open-Meteo
   if (normalizedIntent === "weather") {
+    console.log(`[generateAIResponse] Weather path: district=${district}, state=${state}`);
     if (district && state) {
-      return await getWeatherResponse(district, state, lang, pincode);
+      try {
+        const result = await getWeatherResponse(district, state, lang, pincode);
+        console.log(`[generateAIResponse] Weather result: ${result.substring(0, 80)}...`);
+        return result;
+      } catch (e: any) {
+        console.error(`[generateAIResponse] Weather error:`, e.message);
+        return `🌦️ *Weather*\n\nUnable to fetch weather. Please try again later.`;
+      }
     }
+    console.log(`[generateAIResponse] Weather: missing district/state, sending fallback`);
     const fallback: Record<string, string> = {
       english: `🌦️ *Weather*
 
