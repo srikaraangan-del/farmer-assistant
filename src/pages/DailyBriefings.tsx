@@ -8,7 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Newspaper, Send, Users, CheckCircle, Loader2, Eye, ChevronLeft, ChevronRight, Clock, TrendingUp, Radio, Wifi, CloudSun, BrainCircuit, Sparkles } from "lucide-react";
+import { Newspaper, Send, Users, CheckCircle, Loader2, Eye, ChevronLeft, ChevronRight, Clock, TrendingUp, Radio, Wifi, CloudSun, BrainCircuit, Sparkles, Rss, RefreshCw, ExternalLink, Trash2 } from "lucide-react";
 
 export default function DailyBriefings() {
   const [selectedFarmerId, setSelectedFarmerId] = useState<number | null>(null);
@@ -17,6 +17,25 @@ export default function DailyBriefings() {
 
   const utils = trpc.useUtils();
   const { data: stats } = trpc.briefings.stats.useQuery();
+  const { data: newsStats } = trpc.news.stats.useQuery();
+  const { data: newsList, isLoading: newsLoading } = trpc.news.list.useQuery();
+  const refreshNewsMutation = trpc.news.refresh.useMutation({
+    onSuccess: (data) => {
+      toast.success(`News refreshed!`, { description: `${data.inserted} new, ${data.duplicates} duplicates` });
+      utils.news.list.invalidate();
+      utils.news.stats.invalidate();
+    },
+    onError: (err) => {
+      toast.error("Refresh failed", { description: err.message });
+    },
+  });
+  const deleteNewsMutation = trpc.news.delete.useMutation({
+    onSuccess: () => {
+      toast.success("News item removed");
+      utils.news.list.invalidate();
+      utils.news.stats.invalidate();
+    },
+  });
   const { data: history } = trpc.briefings.list.useQuery({ page, limit: 20 });
   const { data: farmersList } = trpc.farmers.list.useQuery({ isActive: true, limit: 100 });
   const { data: dataSources } = trpc.briefings.dataSources.useQuery();
@@ -63,11 +82,12 @@ export default function DailyBriefings() {
         </Button>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-5 gap-4">
         <Card><CardContent className="p-5"><div className="flex items-center justify-between"><div><p className="text-sm text-muted-foreground">Total Sent</p><p className="text-2xl font-bold">{stats?.total ?? 0}</p></div><div className="h-10 w-10 bg-blue-100 rounded-lg flex items-center justify-center"><Newspaper className="h-5 w-5 text-blue-600" /></div></div></CardContent></Card>
         <Card><CardContent className="p-5"><div className="flex items-center justify-between"><div><p className="text-sm text-muted-foreground">Sent Today</p><p className="text-2xl font-bold">{stats?.today ?? 0}</p></div><div className="h-10 w-10 bg-green-100 rounded-lg flex items-center justify-center"><CheckCircle className="h-5 w-5 text-green-600" /></div></div></CardContent></Card>
         <Card><CardContent className="p-5"><div className="flex items-center justify-between"><div><p className="text-sm text-muted-foreground">Active Farmers</p><p className="text-2xl font-bold">{farmersList?.items.length ?? 0}</p></div><div className="h-10 w-10 bg-amber-100 rounded-lg flex items-center justify-center"><Users className="h-5 w-5 text-amber-600" /></div></div></CardContent></Card>
         <Card><CardContent className="p-5"><div className="flex items-center justify-between"><div><p className="text-sm text-muted-foreground">Pending</p><p className="text-2xl font-bold">{stats?.byStatus?.find((s: any) => s.status === "pending")?.count ?? 0}</p></div><div className="h-10 w-10 bg-orange-100 rounded-lg flex items-center justify-center"><Clock className="h-5 w-5 text-orange-600" /></div></div></CardContent></Card>
+        <Card><CardContent className="p-5"><div className="flex items-center justify-between"><div><p className="text-sm text-muted-foreground">News Articles</p><p className="text-2xl font-bold">{newsStats?.total ?? 0}</p></div><div className="h-10 w-10 bg-red-100 rounded-lg flex items-center justify-center"><Rss className="h-5 w-5 text-red-600" /></div></div></CardContent></Card>
       </div>
 
       <Card className="border-primary/20">
@@ -77,7 +97,7 @@ export default function DailyBriefings() {
             <h3 className="font-semibold">AI Data Sources — All Automated</h3>
             <Badge variant="default" className="text-[10px]">NO MANUAL DATA ENTRY</Badge>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
             <div className="p-4 rounded-lg border bg-sky-50 border-sky-200">
               <div className="flex items-center gap-2 mb-2"><Wifi className="h-4 w-4 text-green-600" /><CloudSun className="h-5 w-5 text-sky-600" /><span className="font-medium text-sm">Weather</span><Badge variant="default" className="text-[10px] ml-auto">LIVE</Badge></div>
               <p className="text-xs text-muted-foreground">{dataSources?.weather.source ?? "Open-Meteo API"}</p>
@@ -90,13 +110,18 @@ export default function DailyBriefings() {
               <div className="flex items-center gap-2 mb-2"><Wifi className="h-4 w-4 text-green-600" /><BrainCircuit className="h-5 w-5 text-purple-600" /><span className="font-medium text-sm">AI Engine</span><Badge variant="default" className="text-[10px] ml-auto">ACTIVE</Badge></div>
               <p className="text-xs text-muted-foreground">Government DB + AI Crop Advice</p>
             </div>
+            <div className="p-4 rounded-lg border bg-red-50 border-red-200">
+              <div className="flex items-center gap-2 mb-2"><Wifi className="h-4 w-4 text-green-600" /><Rss className="h-5 w-5 text-red-600" /><span className="font-medium text-sm">Daily News</span><Badge variant="default" className="text-[10px] ml-auto">RSS</Badge></div>
+              <p className="text-xs text-muted-foreground">The Hindu, Krishak Jagat RSS</p>
+            </div>
           </div>
         </CardContent>
       </Card>
 
       <Tabs value={previewTab} onValueChange={setPreviewTab}>
-        <TabsList className="grid w-full max-w-md grid-cols-2">
+        <TabsList className="grid w-full max-w-lg grid-cols-3">
           <TabsTrigger value="preview">Preview &amp; Send</TabsTrigger>
+          <TabsTrigger value="news">Daily News</TabsTrigger>
           <TabsTrigger value="history">History</TabsTrigger>
         </TabsList>
 
@@ -180,6 +205,70 @@ export default function DailyBriefings() {
               </Card>
             </div>
           </div>
+        </TabsContent>
+
+        <TabsContent value="news" className="space-y-4 mt-4">
+          <Card>
+            <CardContent className="p-5">
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-2">
+                  <Rss className="h-5 w-5 text-red-600" />
+                  <h3 className="font-semibold">Daily Farming News</h3>
+                  <Badge variant="secondary" className="text-xs">{newsStats?.total ?? 0} articles</Badge>
+                  {newsStats && newsStats.today > 0 && <Badge variant="default" className="text-xs bg-green-100 text-green-800">{newsStats.today} today</Badge>}
+                </div>
+                <Button onClick={() => refreshNewsMutation.mutate()} disabled={refreshNewsMutation.isPending} size="sm" variant="outline">
+                  {refreshNewsMutation.isPending ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <RefreshCw className="h-4 w-4 mr-2" />}
+                  Fetch Latest
+                </Button>
+              </div>
+
+              {newsLoading ? (
+                <div className="space-y-3">{Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-20 w-full" />)}</div>
+              ) : !newsList || newsList.length === 0 ? (
+                <div className="text-center py-8 text-muted-foreground">
+                  <Rss className="h-10 w-10 mx-auto mb-3 opacity-30" />
+                  <p className="text-sm">No news articles yet.</p>
+                  <p className="text-xs mt-1">Click "Fetch Latest" to pull farming news from RSS feeds.</p>
+                </div>
+              ) : (
+                <div className="space-y-3 max-h-[500px] overflow-y-auto">
+                  {newsList.map((item) => (
+                    <div key={item.id} className="border rounded-lg p-4 hover:bg-muted/30 transition-colors">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 mb-1">
+                            <h4 className="font-medium text-sm">{item.title}</h4>
+                            <Badge variant="outline" className="text-[10px] shrink-0">{item.source}</Badge>
+                            <Badge variant="secondary" className="text-[10px] shrink-0 capitalize">{item.category}</Badge>
+                          </div>
+                          <p className="text-xs text-muted-foreground line-clamp-2">{item.summary}</p>
+                          <div className="flex items-center gap-3 mt-2">
+                            {item.sourceUrl && (
+                              <a href={item.sourceUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-600 hover:underline flex items-center gap-1">
+                                <ExternalLink className="h-3 w-3" /> Read full article
+                              </a>
+                            )}
+                            <span className="text-[10px] text-muted-foreground">
+                              {item.publishedDate ? new Date(item.publishedDate).toLocaleDateString() : new Date(item.fetchedAt).toLocaleDateString()}
+                            </span>
+                          </div>
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-8 w-8 p-0 text-red-500 hover:text-red-700 hover:bg-red-50"
+                          onClick={() => { if (window.confirm("Remove this news item?")) deleteNewsMutation.mutate({ id: item.id }); }}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
         </TabsContent>
 
         <TabsContent value="history" className="space-y-4 mt-4">

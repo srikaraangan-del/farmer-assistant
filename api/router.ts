@@ -13,6 +13,7 @@ import { settingsRouter } from "./settings-router";
 import { whatsappRouter } from "./whatsapp-router";
 import { briefingsRouter } from "./briefings-router";
 import { localAuthRouter } from "./local-auth-router";
+import { newsRouter } from "./news-router";
 
 export const appRouter = createRouter({
   ping: publicQuery.query(() => ({ ok: true, ts: Date.now() })),
@@ -30,6 +31,7 @@ export const appRouter = createRouter({
   settings: settingsRouter,
   whatsapp: whatsappRouter,
   briefings: briefingsRouter,
+  news: newsRouter,
 });
 
 export type AppRouter = typeof appRouter;

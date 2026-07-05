@@ -353,6 +353,48 @@ export const cropKnowledge = mysqlTable(
 export type CropKnowledge = typeof cropKnowledge.$inferSelect;
 export type InsertCropKnowledge = typeof cropKnowledge.$inferInsert;
 
+// ============ DAILY FARMING NEWS ============
+
+export const dailyNews = mysqlTable(
+  "daily_news",
+  {
+    id: serial("id").primaryKey(),
+    title: varchar("title", { length: 500 }).notNull(),
+    titleTelugu: varchar("title_telugu", { length: 500 }),
+    titleHindi: varchar("title_hindi", { length: 500 }),
+    summary: text("summary").notNull(),
+    summaryTelugu: text("summary_telugu"),
+    summaryHindi: text("summary_hindi"),
+    source: varchar("source", { length: 255 }).notNull(), // e.g., "The Hindu", "Krishak Jagat"
+    sourceUrl: varchar("source_url", { length: 1000 }),
+    category: mysqlEnum("category", [
+      "policy",
+      "market",
+      "weather",
+      "technology",
+      "schemes",
+      "research",
+      "general",
+    ])
+      .default("general")
+      .notNull(),
+    state: varchar("state", { length: 100 }), // state-specific news if applicable
+    publishedDate: date("published_date"),
+    fetchedAt: timestamp("fetched_at").defaultNow().notNull(),
+    isActive: boolean("is_active").default(true).notNull(),
+    sentToFarmers: int("sent_to_farmers").default(0).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    index("news_category_idx").on(table.category),
+    index("news_active_idx").on(table.isActive),
+    index("news_fetched_idx").on(table.fetchedAt),
+  ]
+);
+
+export type DailyNews = typeof dailyNews.$inferSelect;
+export type InsertDailyNews = typeof dailyNews.$inferInsert;
+
 // ============ ANALYTICS & EVENTS ============
 
 export const analyticsEvents = mysqlTable(

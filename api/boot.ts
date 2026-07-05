@@ -9,7 +9,7 @@ import { env } from "./lib/env";
 import { createOAuthCallbackHandler } from "./kimi/auth";
 import { Paths } from "@contracts/constants";
 import { getDb } from "./queries/connection";
-import { farmers, messages, conversations, pincodes, marketPrices, governmentSchemes, cropKnowledge } from "@db/schema";
+import { farmers, messages, conversations, pincodes, marketPrices, governmentSchemes, cropKnowledge, dailyNews } from "@db/schema";
 import { eq, desc, sql, and } from "drizzle-orm";
 
 const app = new Hono<{ Bindings: HttpBindings }>();
@@ -429,6 +429,7 @@ const MAIN_MENU: Record<string, { header: string; body: string; footer: string; 
         { id: "prices", title: "Market Prices", description: "Check current crop prices" },
         { id: "schemes", title: "Govt Schemes", description: "Find eligible government schemes" },
         { id: "crops", title: "Crop Knowledge", description: "Get farming advice for your crops" },
+        { id: "news", title: "Daily News", description: "Read latest farming news and updates" },
         { id: "language", title: "Change Language", description: "Switch to Telugu, Hindi or English" },
       ],
     }],
@@ -445,6 +446,7 @@ const MAIN_MENU: Record<string, { header: string; body: string; footer: string; 
         { id: "prices", title: "మార్కెట్ ధరలు", description: "పంటల వర్తమాన ధరలు తనిఖీ చేయండి" },
         { id: "schemes", title: "ప్రభుత్వ పథకాలు", description: "అర్హత గల ప్రభుత్వ పథకాలు కనుగొనండి" },
         { id: "crops", title: "పంట జ్ఞానం", description: "మీ పంటల కోసం వ్యవసాయ సలహా పొందండి" },
+        { id: "news", title: "రోజువారీ వార్తలు", description: "తాజా వ్యవసాయ వార్తలు చదవండి" },
         { id: "language", title: "భాష మార్చు", description: "తెలుగు, హిందీ లేదా ఆంగ్లంలోకి మార్చండి" },
       ],
     }],
@@ -461,6 +463,7 @@ const MAIN_MENU: Record<string, { header: string; body: string; footer: string; 
         { id: "prices", title: "बाजार भाव", description: "फसलों के वर्तमान भाव जांचें" },
         { id: "schemes", title: "सरकारी योजनाएं", description: "पात्र सरकारी योजनाएं खोजें" },
         { id: "crops", title: "फसल ज्ञान", description: "अपनी फसलों के लिए कृषि सलाह" },
+        { id: "news", title: "दैनिक समाचार", description: "नवीनतम कृषि समाचार पढ़ें" },
         { id: "language", title: "भाषा बदलें", description: "तेलुगु, हिंदी या अंग्रेजी में बदलें" },
       ],
     }],
@@ -506,6 +509,7 @@ function handleInteractiveReply(replyId: string, lang: string): { intent: string
     prices: "market_prices",
     schemes: "government_schemes",
     crops: "crop_knowledge",
+    news: "daily_news",
     language: "language_change",
     lang_english: "set_language_english",
     lang_telugu: "set_language_telugu",
@@ -513,7 +517,7 @@ function handleInteractiveReply(replyId: string, lang: string): { intent: string
   };
 
   const intent = intentMap[replyId] ?? "general";
-  const isMenuAction = ["weather", "prices", "schemes", "crops", "language"].includes(replyId);
+  const isMenuAction = ["weather", "prices", "schemes", "crops", "news", "language"].includes(replyId);
 
   return { intent, isMenuAction };
 }
@@ -786,6 +790,16 @@ function detectIntent(message: string): string {
     },
     {
       keywords: [
+        "news", "samachar", "newspaper", "khabar", "vaartha", "vaarta",
+        "farming news", "agriculture news", "daily news", "today news",
+        "వార్తలు", "వార్త", "రోజువారీ వార్తలు", "వ్యవసాయ వార్తలు", "తాజా వార్తలు",
+        "समाचार", "खबर", "दैनिक समाचार", "कृषि समाचार", "आज की खबर",
+        "ಸುದ್ದಿ", "ವಾರ್ತೆ", "ದೈನಂದಿನ ಸುದ್ದಿ", "ಕೃಷಿ ಸುದ್ದಿ", "ಇಂದಿನ ಸುದ್ದಿ",
+      ],
+      intent: "daily_news",
+    },
+    {
+      keywords: [
         "menu", "hello", "hi", "hey", "namaste", "namaskaram", "namaskara",
         "welcome", "start", "begin", "help",
         "మెనూ", "సేవలు", "హలో", "హాయి", "నమస్కారం", "శుభోదయం",
@@ -999,6 +1013,53 @@ async function formatCropAdviceFromDB(lang: string, farmerCrop?: string | null):
   }
 }
 
+// Fetch daily farming news from DB
+async function formatNewsFromDB(lang: string): Promise<string> {
+  const db = getDb();
+  try {
+    const items = await db.select().from(dailyNews)
+      .where(eq(dailyNews.isActive, true))
+      .orderBy(desc(dailyNews.fetchedAt))
+      .limit(5);
+
+    const headers: Record<string, string> = {
+      english: `📰 *Daily Farming News*\n\nLatest agriculture updates:\n\n`,
+      hindi: `📰 *दैनिक कृषि समाचार*\n\nनवीनतम कृषि अपडेट:\n\n`,
+      telugu: `📰 *రోజువారీ వ్యవసాయ వార్తలు*\n\nతాజా వ్యవసాయ అప్‌డేట్‌లు:\n\n`,
+      kannada: `📰 *ದೈನಂದಿನ ಕೃಷಿ ಸುದ್ದಿ*\n\nತಾಜಾ ಕೃಷಿ ಅಪ್‌ಡೇಟ್‌ಗಳು:\n\n`,
+    };
+
+    if (items.length === 0) {
+      const noData: Record<string, string> = {
+        english: `📰 *Daily Farming News*\n\nNo news articles available yet.\nCheck back later for the latest farming updates.`,
+        hindi: `📰 *दैनिक कृषि समाचार*\n\nअभी कोई समाचार लेख उपलब्ध नहीं।\nनवीनतम कृषि अपडेट के लिए बाद में जांचें।`,
+        telugu: `📰 *రోజువారీ వ్యవసాయ వార్తలు*\n\nఇంకా వార్తా కథనాలు అందుబాటులో లేవు.\nతాజా వ్యవసాయ అప్‌డేట్‌ల కోసం తర్వాత తనిఖీ చేయండి.`,
+        kannada: `📰 *ದೈನಂದಿನ ಕೃಷಿ ಸುದ್ದಿ*\n\nಇನ್ನೂ ಸುದ್ದಿ ಲೇಖನಗಳು ಲಭ್ಯವಿಲ್ಲ.\nತಾಜಾ ಕೃಷಿ ಅಪ್‌ಡೇಟ್‌ಗಳಿಗಾಗಿ ನಂತರ ಪರಿಶೀಲಿಸಿ.`,
+      };
+      return noData[lang] ?? noData.english;
+    }
+
+    let body = "";
+    for (const item of items) {
+      const title = lang === "telugu" && item.titleTelugu ? item.titleTelugu
+        : lang === "hindi" && item.titleHindi ? item.titleHindi
+        : item.title;
+      const summary = lang === "telugu" && item.summaryTelugu ? item.summaryTelugu
+        : lang === "hindi" && item.summaryHindi ? item.summaryHindi
+        : item.summary;
+      body += `• *${title}*\n  ${summary.substring(0, 120)}${summary.length > 120 ? "..." : ""}\n`;
+      if (item.source) body += `  📰 ${item.source}`;
+      if (item.sourceUrl) body += ` — ${item.sourceUrl}`;
+      body += `\n\n`;
+    }
+
+    return (headers[lang] ?? headers.english) + body;
+  } catch (e: any) {
+    console.error("[News] DB error:", e.message);
+    return `📰 *Daily News*\n\nUnable to fetch news. Please try again later.`;
+  }
+}
+
 async function generateAIResponse(intent: string, lang: string, district?: string | null, state?: string | null, pincode?: string | null, farmerCrop?: string | null): Promise<string> {
   console.log(`[generateAIResponse] START: intent=${intent}, lang=${lang}, district=${district}, state=${state}, pincode=${pincode}, crop=${farmerCrop}`);
 
@@ -1063,7 +1124,12 @@ Type "menu" to see options.`,
     return await formatCropAdviceFromDB(lang, farmerCrop);
   }
 
-  // 5. Static responses for greeting, language_change, general
+  // 5. Daily News — query from DB
+  if (normalizedIntent === "daily_news") {
+    return await formatNewsFromDB(lang);
+  }
+
+  // 6. Static responses for greeting, language_change, general
   const responses: Record<string, Record<string, string>> = {
     greeting: {
       english: `👋 *Welcome to Kisan Saathi!*
