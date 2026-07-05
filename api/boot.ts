@@ -184,37 +184,48 @@ async function processIncomingMessage(phoneNumber: string, message: string, cont
     const farmerPincode = farmer[0]?.pincode;
     const farmerCrop = farmer[0]?.primaryCrop;
 
-    console.log(`[WhatsApp] Generating response: intent=${intent}, lang=${lang}, district=${farmerDistrict}, state=${farmerState}, hasFarmer=${!!farmer[0]}`);
+    console.log(`[WhatsApp] === PROCESSING ${phoneNumber} === intent=${intent}, lang=${lang}, district=${farmerDistrict}, state=${farmerState}`);
 
+    // Step 1: Generate response
+    console.log(`[WhatsApp] Step 1: Generating AI response...`);
     aiResponse = await generateAIResponse(intent, lang, farmerDistrict, farmerState, farmerPincode, farmerCrop);
-    console.log(`[WhatsApp] Generated response (${aiResponse.length} chars): ${aiResponse.substring(0, 100)}...`);
+    console.log(`[WhatsApp] Step 1 DONE: Response ${aiResponse.length} chars`);
 
-    // 5. Save farmer message
+    // Step 2: Save farmer message
+    console.log(`[WhatsApp] Step 2: Saving farmer message...`);
     await db.insert(messages).values({
       conversationId, farmerId, senderType: "farmer",
       contentType: contentType as "text" | "voice" | "image" | "template",
       content: message || interactiveId, language: lang, intentDetected: intent,
     });
+    console.log(`[WhatsApp] Step 2 DONE`);
 
-    // 6. Save AI response
+    // Step 3: Save AI response
+    console.log(`[WhatsApp] Step 3: Saving AI response...`);
     await db.insert(messages).values({
       conversationId, farmerId, senderType: "ai",
       contentType: "text", content: aiResponse,
       language: lang, aiResponse, intentDetected: intent,
     });
+    console.log(`[WhatsApp] Step 3 DONE`);
 
-    // 7. Update conversation
+    // Step 4: Update conversation
+    console.log(`[WhatsApp] Step 4: Updating conversation...`);
     await db.update(conversations).set({
       intent, messageCount: sql`${conversations.messageCount} + 2`, updatedAt: new Date(),
     }).where(eq(conversations.id, conversationId));
+    console.log(`[WhatsApp] Step 4 DONE`);
 
-    // 8. Update farmer stats
+    // Step 5: Update farmer stats
+    console.log(`[WhatsApp] Step 5: Updating farmer stats...`);
     await db.update(farmers).set({
       totalInteractions: sql`${farmers.totalInteractions} + 1`,
       lastInteractionAt: new Date(), updatedAt: new Date(),
     }).where(eq(farmers.id, farmerId));
+    console.log(`[WhatsApp] Step 5 DONE`);
 
-    // 9. Send response
+    // Step 6: Send response
+    console.log(`[WhatsApp] Step 6: Sending response... menuAction=${isMenuAction}, intent=${intent}`);
     if (isMenuAction && intent === "language_change") {
       await sendLanguageMenu(phoneNumber);
     } else if (isMenuAction) {
@@ -226,12 +237,17 @@ async function processIncomingMessage(phoneNumber: string, message: string, cont
     } else {
       await sendWhatsAppMessage(phoneNumber, aiResponse);
     }
-    console.log(`[WhatsApp] Response sent to ${phoneNumber}: intent=${intent}, menuAction=${isMenuAction}`);
+    console.log(`[WhatsApp] === COMPLETE ${phoneNumber} ===`);
   } catch (err: any) {
-    console.error(`[WhatsApp] CRITICAL ERROR for ${phoneNumber}:`, err.message, err.stack);
+    console.error(`[WhatsApp] CRITICAL ERROR for ${phoneNumber} at step unknown:`, err.message);
+    console.error(`[WhatsApp] Stack:`, err.stack);
     // Send error message to farmer so they're not left hanging
-    const errorMsg = `Sorry, there was an error processing your request. Please try again.`;
-    await sendWhatsAppMessage(phoneNumber, errorMsg);
+    const errorMsg = `Sorry, there was an error. Please try again.`;
+    try {
+      await sendWhatsAppMessage(phoneNumber, errorMsg);
+    } catch (sendErr: any) {
+      console.error(`[WhatsApp] Failed to send error message:`, sendErr.message);
+    }
   }
 }
 
