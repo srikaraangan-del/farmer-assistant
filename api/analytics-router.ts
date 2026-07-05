@@ -43,10 +43,10 @@ export const analyticsRouter = createRouter({
         .select({ count: count() })
         .from(governmentSchemes)
         .where(sql`${governmentSchemes.isActive} = true`),
-      db
-        .selectDistinct({ location: weatherCache.location })
-        .from(weatherCache)
-        .where(sql`${weatherCache.expiresAt} > NOW()`),
+      // Count both cached weather locations AND unique farmer pincodes
+      db.select({ count: sql<number>`COUNT(DISTINCT ${farmers.pincode})` })
+        .from(farmers)
+        .where(sql`${farmers.pincode} IS NOT NULL AND ${farmers.pincode} != ''`),
     ]);
 
     return {
