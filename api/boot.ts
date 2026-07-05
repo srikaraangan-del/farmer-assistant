@@ -51,11 +51,29 @@ app.post("/api/webhook/whatsapp", async (c) => {
         const messages_data = change.value?.messages ?? [];
         for (const msg of messages_data) {
           const from = msg.from;           // Sender's phone number
-          const text = msg.text?.body ?? ""; // Message text
           const type = msg.type ?? "text";   // Message type
 
-          if (text) {
-            await processIncomingMessage(from, text, type);
+          let text = "";
+          let interactiveId = "";
+
+          if (type === "interactive") {
+            // Handle button replies and list selections
+            const interactive = msg.interactive;
+            if (interactive?.type === "button_reply") {
+              interactiveId = interactive.button_reply?.id ?? "";
+              text = interactive.button_reply?.title ?? "";
+            } else if (interactive?.type === "list_reply") {
+              interactiveId = interactive.list_reply?.id ?? "";
+              text = interactive.list_reply?.title ?? "";
+            }
+            console.log(`[WhatsApp] Interactive reply from ${from}: id=${interactiveId}, title=${text}`);
+          } else {
+            // Regular text message
+            text = msg.text?.body ?? "";
+          }
+
+          if (text || interactiveId) {
+            await processIncomingMessage(from, text, type, interactiveId);
           }
         }
       }
@@ -80,7 +98,7 @@ function normalizePhone(phone: string): string {
 }
 
 // Process incoming WhatsApp message
-async function processIncomingMessage(phoneNumber: string, message: string, contentType: string) {
+async function processIncomingMessage(phoneNumber: string, message: string, contentType: string, interactiveId: string = "") {
   const db = getDb();
 
   // Normalize phone number before lookup
@@ -90,6 +108,7 @@ async function processIncomingMessage(phoneNumber: string, message: string, cont
   let farmer = await db.select().from(farmers).where(eq(farmers.phoneNumber, normalizedPhone)).limit(1);
 
   let farmerId: number;
+  let isNewFarmer = false;
   if (!farmer[0]) {
     const result = await db.insert(farmers).values({
       phoneNumber: normalizedPhone,
@@ -97,6 +116,7 @@ async function processIncomingMessage(phoneNumber: string, message: string, cont
       isActive: true,
     });
     farmerId = Number(result[0].insertId);
+    isNewFarmer = true;
     console.log(`[WhatsApp] New farmer registered: ${normalizedPhone}`);
   } else {
     farmerId = farmer[0].id;
@@ -115,10 +135,37 @@ async function processIncomingMessage(phoneNumber: string, message: string, cont
     conversationId = conversation[0].id;
   }
 
-  // 3. Detect intent
-  const intent = detectIntent(message);
+  // 3. Detect intent (from text or interactive ID)
+  let intent: string;
+  let isMenuAction = false;
 
-  // 4. Generate AI response (async for weather with location + pincode)
+  if (interactiveId) {
+    // Handle interactive button/list replies
+    const lang = farmer[0]?.preferredLanguage ?? "english";
+    const result = handleInteractiveReply(interactiveId, lang);
+    intent = result.intent;
+    isMenuAction = result.isMenuAction;
+
+    // Handle language change
+    if (intent.startsWith("set_language_")) {
+      const newLang = intent.replace("set_language_", "");
+      await db.update(farmers).set({ preferredLanguage: newLang }).where(eq(farmers.id, farmerId));
+
+      // Confirm in new language
+      const confirmText = newLang === "telugu" ? "భాష తెలుగుకు మార్చబడింది."
+        : newLang === "hindi" ? "भाषा हिंदी में बदल दी गई है।"
+        : "Language changed to English.";
+      await sendWhatsAppMessage(phoneNumber, confirmText);
+
+      // Send main menu in new language
+      await sendMainMenu(phoneNumber, newLang);
+      return;
+    }
+  } else {
+    intent = detectIntent(message);
+  }
+
+  // 4. Generate AI response
   const lang = farmer[0]?.preferredLanguage ?? "english";
   const farmerDistrict = farmer[0]?.district;
   const farmerState = farmer[0]?.state;
@@ -129,7 +176,7 @@ async function processIncomingMessage(phoneNumber: string, message: string, cont
   await db.insert(messages).values({
     conversationId, farmerId, senderType: "farmer",
     contentType: contentType as "text" | "voice" | "image" | "template",
-    content: message, language: lang, intentDetected: intent,
+    content: message || interactiveId, language: lang, intentDetected: intent,
   });
 
   // 6. Save AI response
@@ -150,10 +197,24 @@ async function processIncomingMessage(phoneNumber: string, message: string, cont
     lastInteractionAt: new Date(), updatedAt: new Date(),
   }).where(eq(farmers.id, farmerId));
 
-  console.log(`[WhatsApp] Processed message from ${phoneNumber}: intent=${intent}`);
+  console.log(`[WhatsApp] Processed message from ${phoneNumber}: intent=${intent}, interactive=${interactiveId}`);
 
-  // 9. Send AI response back to farmer via WhatsApp
-  await sendWhatsAppMessage(phoneNumber, aiResponse);
+  // 9. Send response
+  if (isMenuAction && intent === "language_change") {
+    // Send language selection buttons
+    await sendLanguageMenu(phoneNumber);
+  } else if (isMenuAction) {
+    // For menu items: send response then re-send menu
+    await sendWhatsAppMessage(phoneNumber, aiResponse);
+    await sendMainMenu(phoneNumber, lang);
+  } else if (isNewFarmer) {
+    // New farmer: send welcome + main menu
+    await sendWhatsAppMessage(phoneNumber, aiResponse);
+    await sendMainMenu(phoneNumber, lang);
+  } else {
+    // Regular text message
+    await sendWhatsAppMessage(phoneNumber, aiResponse);
+  }
 }
 
 // Send message back to farmer via WhatsApp Cloud API
@@ -198,6 +259,192 @@ async function sendWhatsAppMessage(toPhoneNumber: string, message: string) {
   } catch (err: any) {
     console.error(`[WhatsApp] Error sending message to ${normalizedTo}:`, err.message);
   }
+}
+
+// ====== WHATSAPP INTERACTIVE MESSAGES (Buttons & Lists) ======
+
+// Send a List Message — opens a scrollable list of options
+type ListRow = { id: string; title: string; description: string };
+type ListSection = { title: string; rows: ListRow[] };
+
+async function sendWhatsAppList(toPhoneNumber: string, header: string, body: string, footer: string, buttonText: string, sections: ListSection[]) {
+  if (!WHATSAPP_TOKEN || !WHATSAPP_PHONE_ID) return;
+  const normalizedTo = normalizePhone(toPhoneNumber);
+  if (normalizedTo.length < 10) return;
+
+  try {
+    const url = `https://graph.facebook.com/v18.0/${WHATSAPP_PHONE_ID}/messages`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${WHATSAPP_TOKEN}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        messaging_product: "whatsapp",
+        recipient_type: "individual",
+        to: normalizedTo,
+        type: "interactive",
+        interactive: {
+          type: "list",
+          header: { type: "text", text: header },
+          body: { text: body },
+          footer: { text: footer },
+          action: { button: buttonText, sections },
+        },
+      }),
+    });
+
+    const result = await response.json();
+    if (!response.ok) {
+      console.error(`[WhatsApp] List send failed:`, JSON.stringify(result));
+      return false;
+    }
+    console.log(`[WhatsApp] List message sent to ${normalizedTo}: ${header}`);
+    return true;
+  } catch (err: any) {
+    console.error(`[WhatsApp] List error:`, err.message);
+    return false;
+  }
+}
+
+// Send Reply Buttons — up to 3 inline buttons
+async function sendWhatsAppButtons(toPhoneNumber: string, body: string, buttons: { id: string; title: string }[]) {
+  if (!WHATSAPP_TOKEN || !WHATSAPP_PHONE_ID) return;
+  const normalizedTo = normalizePhone(toPhoneNumber);
+  if (normalizedTo.length < 10) return;
+
+  try {
+    const url = `https://graph.facebook.com/v18.0/${WHATSAPP_PHONE_ID}/messages`;
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${WHATSAPP_TOKEN}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        messaging_product: "whatsapp",
+        recipient_type: "individual",
+        to: normalizedTo,
+        type: "interactive",
+        interactive: {
+          type: "button",
+          body: { text: body },
+          action: {
+            buttons: buttons.map((b) => ({ type: "reply", reply: { id: b.id, title: b.title } })),
+          },
+        },
+      }),
+    });
+
+    const result = await response.json();
+    if (!response.ok) {
+      console.error(`[WhatsApp] Buttons send failed:`, JSON.stringify(result));
+      return false;
+    }
+    console.log(`[WhatsApp] Buttons sent to ${normalizedTo}: ${buttons.map((b) => b.title).join(", ")}`);
+    return true;
+  } catch (err: any) {
+    console.error(`[WhatsApp] Buttons error:`, err.message);
+    return false;
+  }
+}
+
+// Language-specific main menu
+const MAIN_MENU: Record<string, { header: string; body: string; footer: string; button: string; sections: ListSection[] }> = {
+  english: {
+    header: "Kisan Saathi",
+    body: "Your AI farming assistant. Select a service:",
+    footer: "Tap the button below to see options",
+    button: "Services",
+    sections: [{
+      title: "Available Services",
+      rows: [
+        { id: "weather", title: "Weather", description: "Get weather updates for your area" },
+        { id: "prices", title: "Market Prices", description: "Check current crop prices" },
+        { id: "schemes", title: "Govt Schemes", description: "Find eligible government schemes" },
+        { id: "crops", title: "Crop Knowledge", description: "Get farming advice for your crops" },
+        { id: "language", title: "Change Language", description: "Switch to Telugu, Hindi or English" },
+      ],
+    }],
+  },
+  telugu: {
+    header: "కిసాన్ సాథి",
+    body: "మీ ఎఐ వ్యవసాయ సహాయకుడు. ఒక సేవను ఎంచుకోండి:",
+    footer: "ఎంపికలను చూడటానికి కింది బటన్ నొక్కండి",
+    button: "సేవలు",
+    sections: [{
+      title: "అందుబాటులో ఉన్న సేవలు",
+      rows: [
+        { id: "weather", title: "వాతావరణం", description: "మీ ప్రాంతం కోసం వాతావరణ నవీకరణలు" },
+        { id: "prices", title: "మార్కెట్ ధరలు", description: "పంటల వర్తమాన ధరలు తనిఖీ చేయండి" },
+        { id: "schemes", title: "ప్రభుత్వ పథకాలు", description: "అర్హత గల ప్రభుత్వ పథకాలు కనుగొనండి" },
+        { id: "crops", title: "పంట జ్ఞానం", description: "మీ పంటల కోసం వ్యవసాయ సలహా పొందండి" },
+        { id: "language", title: "భాష మార్చు", description: "తెలుగు, హిందీ లేదా ఆంగ్లంలోకి మార్చండి" },
+      ],
+    }],
+  },
+  hindi: {
+    header: "किसान साथी",
+    body: "आपका AI कृषि सहायक। एक सेवा चुनें:",
+    footer: "विकल्प देखने के लिए नीचे बटन दबाएं",
+    button: "सेवाएं",
+    sections: [{
+      title: "उपलब्ध सेवाएं",
+      rows: [
+        { id: "weather", title: "मौसम", description: "अपने क्षेत्र के लिए मौसम अपडेट" },
+        { id: "prices", title: "बाजार भाव", description: "फसलों के वर्तमान भाव जांचें" },
+        { id: "schemes", title: "सरकारी योजनाएं", description: "पात्र सरकारी योजनाएं खोजें" },
+        { id: "crops", title: "फसल ज्ञान", description: "अपनी फसलों के लिए कृषि सलाह" },
+        { id: "language", title: "भाषा बदलें", description: "तेलुगु, हिंदी या अंग्रेजी में बदलें" },
+      ],
+    }],
+  },
+};
+
+// Language selection buttons
+const LANGUAGE_BUTTONS = [
+  { id: "lang_english", title: "English" },
+  { id: "lang_telugu", title: "Telugu" },
+  { id: "lang_hindi", title: "Hindi" },
+];
+
+// Send main menu as interactive list
+async function sendMainMenu(phoneNumber: string, lang: string) {
+  const menu = MAIN_MENU[lang as keyof typeof MAIN_MENU] ?? MAIN_MENU.english;
+  const success = await sendWhatsAppList(phoneNumber, menu.header, menu.body, menu.footer, menu.button, menu.sections);
+  if (!success) {
+    // Fallback to text message if interactive fails
+    const fallbackText = lang === "telugu"
+      ? "దయచేసి ఒక ఎంపికను టైప్ చేయండి:\n• వాతావరణం\n• మార్కెట్ ధరలు\n• ప్రభుత్వ పథకాలు\n• పంట జ్ఞానం"
+      : lang === "hindi"
+      ? "कृपया एक विकल्प टाइप करें:\n• मौसम\n• बाजार भाव\n• सरकारी योजनाएं\n• फसल ज्ञान"
+      : "Please type an option:\n• Weather\n• Market Prices\n• Govt Schemes\n• Crop Knowledge";
+    await sendWhatsAppMessage(phoneNumber, fallbackText);
+  }
+}
+
+// Send language selection buttons
+async function sendLanguageMenu(phoneNumber: string) {
+  const body = "Please choose your preferred language / कृपया अपनी भाषा चुनें / దయచేసి మీ భాషను ఎంచుకోండి:";
+  const success = await sendWhatsAppButtons(phoneNumber, body, LANGUAGE_BUTTONS);
+  if (!success) {
+    await sendWhatsAppMessage(phoneNumber, "Please type your language: English, Telugu, or Hindi");
+  }
+}
+
+// Handle interactive list/button replies
+function handleInteractiveReply(replyId: string, lang: string): { intent: string; isMenuAction: boolean } {
+  // Map reply IDs to intents
+  const intentMap: Record<string, string> = {
+    weather: "weather",
+    prices: "market_prices",
+    schemes: "government_schemes",
+    crops: "crop_knowledge",
+    language: "language_change",
+    lang_english: "set_language_english",
+    lang_telugu: "set_language_telugu",
+    lang_hindi: "set_language_hindi",
+  };
+
+  const intent = intentMap[replyId] ?? "general";
+  const isMenuAction = ["weather", "prices", "schemes", "crops", "language"].includes(replyId);
+
+  return { intent, isMenuAction };
 }
 
 // Geocode a pincode using Open-Meteo
@@ -553,14 +800,20 @@ function formatMarketPrices(lang: string, district?: string | null, state?: stri
   return (headers[lang] ?? headers.english) + body + (footers[lang] ?? footers.english);
 }
 
-async function generateAIResponse(intent: string, lang: string, district?: string | null, state?: string | null): Promise<string> {
+async function generateAIResponse(intent: string, lang: string, district?: string | null, state?: string | null, pincode?: string | null): Promise<string> {
+  // Normalize intent names from button IDs
+  const normalizedIntent = intent === "market_prices" ? "market_price"
+    : intent === "government_schemes" ? "scheme"
+    : intent === "crop_knowledge" ? "crop_advice"
+    : intent;
+
   // If weather intent and farmer has location, fetch real weather
-  if (intent === "weather" && district && state) {
+  if (normalizedIntent === "weather" && district && state) {
     return await getWeatherResponse(district, state, lang, pincode);
   }
 
   // If market_price intent, generate location-aware prices
-  if (intent === "market_price") {
+  if (normalizedIntent === "market_price") {
     return formatMarketPrices(lang, district, state);
   }
 
@@ -677,6 +930,12 @@ async function generateAIResponse(intent: string, lang: string, district?: strin
         `• 💡 ಕೃಷಿ ಸಲಹೆ\n\n` +
         `ನೀವು ಯಾವ ಮಾಹಿತಿ ಬೇಕು?`,
     },
+    language_change: {
+      english: `🌐 *Language Settings*\n\nChoose your preferred language using the buttons above.`,
+      hindi: `🌐 *भाषा सेटिंग्स*\n\nऊपर दिए गए बटन का उपयोग करके अपनी पसंदीदा भाषा चुनें।`,
+      telugu: `🌐 *భాష సెట్టింగ్స్*\n\nపైన ఉన్న బటన్లను ఉపయోగించి మీకు ఇష్టమైన భాషను ఎంచుకోండి।`,
+      kannada: `🌐 *ಭಾಷೆ ಸೆಟ್ಟಿಂಗ್ಸ್*\n\nಮೇಲಿನ ಬಟನ್ ಬಳಸಿ ನಿಮ್ಮ ಆದ್ಯತೆಯ ಭಾಷೆಯನ್ನು ಆಯ್ಕೆಮಾಡಿ.`,
+    },
     general: {
       english: `🤖 *AI Farmer Assistant*\n\n` +
         `I can help you with:\n` +
@@ -684,33 +943,33 @@ async function generateAIResponse(intent: string, lang: string, district?: strin
         `• 💰 Market prices\n` +
         `• 📋 Government schemes\n` +
         `• 💡 Farming advice\n\n` +
-        `Please send your question!`,
+        `Type "menu" anytime to see options!`,
       hindi: `🤖 *AI किसान सहायक*\n\n` +
         `मैं आपकी मदद कर सकता हूं:\n` +
         `• 🌦️ मौसम की जानकारी\n` +
         `• 💰 बाजार भाव\n` +
         `• 📋 सरकारी योजनाएं\n` +
         `• 💡 खेती सलाह\n\n` +
-        `कृपया अपना सवाल भेजें!`,
+        `"menu" टाइप करें विकल्प देखने के लिए!`,
       telugu: `🤖 *AI రైతు సహాయకుడు*\n\n` +
         `నేను మీకు సహాయం చేయగల విషయాలు:\n` +
         `• 🌦️ వాతావరణ సమాచారం\n` +
         `• 💰 మార్కెట్ ధరలు\n` +
         `• 📋 ప్రభుత్వ పథకాలు\n` +
         `• 💡 వ్యవసాయ సలహా\n\n` +
-        `దయచేసి మీ ప్రశ్నను పంపండి!`,
+        `ఎప్పుడైనా "menu" టైప్ చేస్తే ఎంపికలు కనిపిస్తాయి!`,
       kannada: `🤖 *AI ಕೃಷಿ ಸಹಾಯಕ*\n\n` +
         `ನಾನು ನಿಮಗೆ ಸಹಾಯ ಮಾಡಬಹುದಾದ ವಿಷಯಗಳು:\n` +
         `• 🌦️ ಹವಾಮಾನ ಮಾಹಿತಿ\n` +
         `• 💰 ಬಜಾರ ಬೆಲೆ\n` +
         `• 📋 ಸರ್ಕಾರಿ ಯೋಜನೆಗಳು\n` +
         `• 💡 ಕೃಷಿ ಸಲಭೆ\n\n` +
-        `ದಯವಿಟ್ಟು ನಿಮ್ಮ ಪ್ರಶ್ನೆ ಕಳುಹಿಸಿ!`,
+        `ಯಾವಾಗಲಾದರೂ "menu" ಟೈಪ್ ಮಾಡಿ ಆಯ್ಕೆಗಳನ್ನು ನೋಡಿ!`,
     },
   };
 
   const langMap: Record<string, string> = { telugu: "telugu", hindi: "hindi", kannada: "kannada", english: "english" };
-  const responsesForIntent = responses[intent] ?? responses.general;
+  const responsesForIntent = responses[normalizedIntent] ?? responses.general;
   return responsesForIntent[langMap[lang] ?? "english"] ?? responsesForIntent.english;
 }
 
