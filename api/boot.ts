@@ -118,6 +118,8 @@ async function processIncomingMessage(phoneNumber: string, message: string, cont
     farmerId = Number(result[0].insertId);
     isNewFarmer = true;
     console.log(`[WhatsApp] New farmer registered: ${normalizedPhone}`);
+    // Re-fetch the newly created farmer so we have the full record
+    farmer = await db.select().from(farmers).where(eq(farmers.id, farmerId)).limit(1);
   } else {
     farmerId = farmer[0].id;
   }
