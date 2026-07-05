@@ -162,7 +162,15 @@ async function processIncomingMessage(phoneNumber: string, message: string, cont
       return;
     }
   } else {
+    // Text message — detect intent and check for menu trigger
     intent = detectIntent(message);
+    const lowerMsg = message.toLowerCase().trim();
+    // "menu", "hello", "hi", "namaste" should trigger the main menu
+    if (lowerMsg === "menu" || lowerMsg === "hello" || lowerMsg === "hi" || lowerMsg === "hey" ||
+        lowerMsg === "namaste" || lowerMsg === "namaskaram" || lowerMsg === "start" ||
+        lowerMsg === "సేవలు" || lowerMsg === "मेनू" || lowerMsg === "మెనూ") {
+      isMenuAction = true;
+    }
   }
 
   // 4. Generate AI response
@@ -268,39 +276,67 @@ type ListRow = { id: string; title: string; description: string };
 type ListSection = { title: string; rows: ListRow[] };
 
 async function sendWhatsAppList(toPhoneNumber: string, header: string, body: string, footer: string, buttonText: string, sections: ListSection[]) {
-  if (!WHATSAPP_TOKEN || !WHATSAPP_PHONE_ID) return;
+  if (!WHATSAPP_TOKEN || !WHATSAPP_PHONE_ID) {
+    console.warn("[WhatsApp] Cannot send list: Missing token or phone ID");
+    return false;
+  }
   const normalizedTo = normalizePhone(toPhoneNumber);
-  if (normalizedTo.length < 10) return;
+  if (normalizedTo.length < 10) {
+    console.error(`[WhatsApp] Invalid phone for list: ${normalizedTo}`);
+    return false;
+  }
 
   try {
     const url = `https://graph.facebook.com/v18.0/${WHATSAPP_PHONE_ID}/messages`;
+    // Validate button text length (1-20 chars required by Meta)
+    const safeButton = buttonText.slice(0, 20);
+    // Validate row titles (1-24 chars)
+    const safeSections = sections.map((s) => ({
+      title: s.title.slice(0, 24),
+      rows: s.rows.map((r) => ({
+        id: r.id.slice(0, 200),
+        title: r.title.slice(0, 24),
+        description: (r.description || "").slice(0, 72),
+      })),
+    }));
+
+    const payload: any = {
+      messaging_product: "whatsapp",
+      recipient_type: "individual",
+      to: normalizedTo,
+      type: "interactive",
+      interactive: {
+        type: "list",
+        body: { text: body.slice(0, 1024) },
+        action: { button: safeButton, sections: safeSections },
+      },
+    };
+    // Only add header if provided (can cause issues on some API versions)
+    if (header && header.trim().length > 0) {
+      payload.interactive.header = { type: "text", text: header.slice(0, 60) };
+    }
+    // Only add footer if provided
+    if (footer && footer.trim().length > 0) {
+      payload.interactive.footer = { text: footer.slice(0, 60) };
+    }
+
+    console.log(`[WhatsApp] Sending list to ${normalizedTo}: button="${safeButton}", rows=${safeSections.reduce((sum, s) => sum + s.rows.length, 0)}`);
+
     const response = await fetch(url, {
       method: "POST",
       headers: { "Authorization": `Bearer ${WHATSAPP_TOKEN}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        messaging_product: "whatsapp",
-        recipient_type: "individual",
-        to: normalizedTo,
-        type: "interactive",
-        interactive: {
-          type: "list",
-          header: { type: "text", text: header },
-          body: { text: body },
-          footer: { text: footer },
-          action: { button: buttonText, sections },
-        },
-      }),
+      body: JSON.stringify(payload),
     });
 
     const result = await response.json();
     if (!response.ok) {
-      console.error(`[WhatsApp] List send failed:`, JSON.stringify(result));
+      console.error(`[WhatsApp] List send failed (${response.status}):`, JSON.stringify(result));
       return false;
     }
-    console.log(`[WhatsApp] List message sent to ${normalizedTo}: ${header}`);
+    console.log(`[WhatsApp] List message sent successfully to ${normalizedTo}: wamid=${result.messages?.[0]?.id ?? "unknown"}`);
     return true;
   } catch (err: any) {
-    console.error(`[WhatsApp] List error:`, err.message);
+    console.error(`[WhatsApp] List error to ${toPhoneNumber}:`, err.message);
     return false;
   }
 }
@@ -710,11 +746,11 @@ function detectIntent(message: string): string {
     },
     {
       keywords: [
-        "hello", "hi", "hey", "namaste", "namaskaram", "namaskara",
-        "welcome", "start", "begin",
-        "నమస్కారం", "హలో", "హాయి", "శుభోదయం",
-        "नमस्ते", "हैलो", "हाय", "शुभ प्रभात",
-        "ನಮಸ್ಕಾರ", "ಹಲೋ", "ಹಾಯ್",
+        "menu", "hello", "hi", "hey", "namaste", "namaskaram", "namaskara",
+        "welcome", "start", "begin", "help",
+        "మెనూ", "సేవలు", "హలో", "హాయి", "నమస్కారం", "శుభోదయం",
+        "मेनू", "सेवाएं", "नमस्ते", "हैलो", "हाय", "शुभ प्रभात",
+        "ಮೆನು", "ಸೇವೆಗಳು", "ನಮಸ್ಕಾರ", "ಹಲೋ", "ಹಾಯ್",
       ],
       intent: "greeting",
     },
