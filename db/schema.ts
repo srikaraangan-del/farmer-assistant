@@ -133,7 +133,7 @@ export const messages = mysqlTable(
       .references(() => farmers.id),
     senderType: mysqlEnum("sender_type", ["farmer", "ai", "system"])
       .notNull(),
-    contentType: mysqlEnum("content_type", ["text", "voice", "image", "template"])
+    contentType: mysqlEnum("content_type", ["text", "voice", "image", "template", "interactive"])
       .default("text")
       .notNull(),
     content: text("content"), // text content or transcription

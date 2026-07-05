@@ -195,7 +195,7 @@ async function processIncomingMessage(phoneNumber: string, message: string, cont
     console.log(`[WhatsApp] Step 2: Saving farmer message...`);
     await db.insert(messages).values({
       conversationId, farmerId, senderType: "farmer",
-      contentType: contentType as "text" | "voice" | "image" | "template",
+      contentType: "text", // DB enum only allows text/voice/image/template
       content: message || interactiveId, language: lang, intentDetected: intent,
     });
     console.log(`[WhatsApp] Step 2 DONE`);
