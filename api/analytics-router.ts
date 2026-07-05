@@ -43,10 +43,11 @@ export const analyticsRouter = createRouter({
         .select({ count: count() })
         .from(governmentSchemes)
         .where(sql`${governmentSchemes.isActive} = true`),
-      // Count both cached weather locations AND unique farmer pincodes
-      db.select({ count: sql<number>`COUNT(DISTINCT ${farmers.pincode})` })
-        .from(farmers)
-        .where(sql`${farmers.pincode} IS NOT NULL AND ${farmers.pincode} != ''`),
+      // Count unique farmer pincodes + weather cache locations
+      db.select({
+        farmerPins: sql<number>`(SELECT COUNT(DISTINCT pincode) FROM farmers WHERE pincode IS NOT NULL AND pincode != '')`,
+        cacheLocs: sql<number>`(SELECT COUNT(DISTINCT pincode) FROM weather_cache WHERE pincode IS NOT NULL)`,
+      }),
     ]);
 
     return {
@@ -65,7 +66,7 @@ export const analyticsRouter = createRouter({
       },
       marketPrices: marketPricesCount[0]?.count ?? 0,
       schemes: schemesCount[0]?.count ?? 0,
-      weatherLocations: weatherLocations.length,
+      weatherLocations: (weatherLocations[0]?.farmerPins ?? 0) + (weatherLocations[0]?.cacheLocs ?? 0),
     };
   }),
 
