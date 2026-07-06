@@ -1033,15 +1033,20 @@ async function formatCropAdviceFromDB(lang: string, farmerCrop?: string | null):
 async function sendCropSelectionList(phoneNumber: string, lang: string) {
   const db = getDb();
   try {
+    console.log(`[CropSelection] Fetching crops for lang=${lang}`);
+
+    // Use DISTINCT in subquery to avoid GROUP BY issues
     const crops = await db.select({
       cropName: cropKnowledge.cropName,
-      cropNameTelugu: cropKnowledge.cropNameTelugu,
-      cropNameHindi: cropKnowledge.cropNameHindi,
-      variety: cropKnowledge.variety,
+      cropNameTelugu: sql<string>`MAX(${cropKnowledge.cropNameTelugu})`,
+      cropNameHindi: sql<string>`MAX(${cropKnowledge.cropNameHindi})`,
+      variety: sql<string>`MAX(${cropKnowledge.variety})`,
     })
       .from(cropKnowledge)
       .where(eq(cropKnowledge.isActive, true))
       .groupBy(cropKnowledge.cropName);
+
+    console.log(`[CropSelection] Found ${crops.length} crops`);
 
     const headers: Record<string, { header: string; body: string; footer: string; button: string }> = {
       english: { header: "Crop Knowledge", body: "Select a crop to get detailed farming advice:", footer: "Tap the button below to see crops", button: "Select Crop" },
@@ -1051,9 +1056,10 @@ async function sendCropSelectionList(phoneNumber: string, lang: string) {
     const h = headers[lang] ?? headers.english;
 
     if (crops.length === 0) {
-      await sendWhatsAppMessage(phoneNumber, lang === "telugu" ? "పంటల జ్ఞానం డేటాబేస్‌లో ఇంకా ఏ పంటలు జోడించబడలేదు."
-        : lang === "hindi" ? "फसल ज्ञान डेटाबेस में अभी कोई फसल नहीं जोड़ी गई।"
-        : "No crops added to the knowledge database yet.");
+      console.log(`[CropSelection] No crops in DB`);
+      await sendWhatsAppMessage(phoneNumber, lang === "telugu" ? "పంటల జ్ఞానం డేటాబేస్‌లో ఇంకా ఏ పంటలు జోడించబడలేదు.\n\n_Admin can add crops via the dashboard._"
+        : lang === "hindi" ? "फसल ज्ञान डेटाबेस में अभी कोई फसल नहीं जोड़ी गई।\n\n_एडमिन डैशबोर्ड से फसलें जोड़ सकते हैं।_"
+        : "No crops added to the knowledge database yet.\n\n_Admin can add crops via the dashboard._");
       return;
     }
 
@@ -1065,21 +1071,29 @@ async function sendCropSelectionList(phoneNumber: string, lang: string) {
       return {
         id: `crop_${c.cropName.toLowerCase().replace(/\s+/g, "_")}`,
         title: `${name}${varietyLabel}`.slice(0, 24),
-        description: lang === "telugu" ? `${name} పంపిణీ సలహా పొందండి`
+        description: lang === "telugu" ? `${name} పంట సలహా పొందండి`
           : lang === "hindi" ? `${name} की विस्तृत सलाह प्राप्त करें`
           : `Get detailed advice for ${name}`,
       };
     });
 
-    await sendWhatsAppList(phoneNumber, h.header, h.body, h.footer, h.button, [{
+    console.log(`[CropSelection] Sending list with ${rows.length} crops`);
+    const success = await sendWhatsAppList(phoneNumber, h.header, h.body, h.footer, h.button, [{
       title: lang === "telugu" ? "పంటల జాబితా" : lang === "hindi" ? "फसल सूची" : "Crop List",
       rows,
     }]);
+
+    if (!success) {
+      console.error(`[CropSelection] sendWhatsAppList returned false`);
+      await sendWhatsAppMessage(phoneNumber, lang === "telugu" ? "మెనూ పంపడంలో లోపం.\n\nపంట పేరు టైప్ చేయండి (ఉదా: Rice, Cotton)."
+        : lang === "hindi" ? "मेनू भेजने में त्रुटि।\n\nफसल का नाम टाइप करें (जैसे: Rice, Cotton)。"
+        : "Error sending menu.\n\nType a crop name (e.g., Rice, Cotton).");
+    }
   } catch (e: any) {
-    console.error("[CropSelection] Error:", e.message);
-    await sendWhatsAppMessage(phoneNumber, lang === "telugu" ? "పంటల జాబితా లోడ్ చేయడంలో లోపం."
-      : lang === "hindi" ? "फसल सूची लोड करने में त्रुटि।"
-      : "Error loading crop list.");
+    console.error(`[CropSelection] CRITICAL ERROR:`, e.message, e.stack);
+    await sendWhatsAppMessage(phoneNumber, lang === "telugu" ? `పంటల జాబితా లోడ్ చేయడంలో లోపం: ${e.message}`
+      : lang === "hindi" ? `फसल सूची लोड करने में त्रुटि: ${e.message}`
+      : `Error loading crop list: ${e.message}`);
   }
 }
 
