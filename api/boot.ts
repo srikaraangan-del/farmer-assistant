@@ -8,7 +8,7 @@ import { createContext } from "./context";
 import { env } from "./lib/env";
 import { createOAuthCallbackHandler } from "./kimi/auth";
 import { Paths } from "@contracts/constants";
-import { getDb } from "./queries/connection";
+import { getDb, getRawPool } from "./queries/connection";
 import { farmers, messages, conversations, pincodes, marketPrices, governmentSchemes, cropKnowledge, dailyNews } from "@db/schema";
 import { eq, desc, sql, and } from "drizzle-orm";
 
@@ -1069,27 +1069,26 @@ async function formatCropAdviceFromDB(lang: string, farmerCrop?: string | null):
 
 // Fetch all distinct crops from DB and send as WhatsApp list
 async function sendCropSelectionList(phoneNumber: string, lang: string) {
-  const db = getDb();
   try {
     console.log(`[CropSelection] Fetching crops for lang=${lang}`);
 
-    // Use RAW SQL to avoid Drizzle ORM issues
-    let allCrops: any[] = [];
+    // Use RAW mysql2 pool - completely bypass Drizzle ORM
+    const pool = getRawPool();
+    let cropArray: any[] = [];
     try {
-      const result = await db.execute(
-        sql`SELECT crop_name, crop_name_telugu, crop_name_hindi, variety, is_active FROM crop_knowledge LIMIT 100`
+      const [rows] = await pool.execute(
+        "SELECT crop_name, crop_name_telugu, crop_name_hindi, variety, is_active FROM crop_knowledge LIMIT 100"
       );
-      allCrops = result.rows || result || [];
-      console.log(`[CropSelection] Raw SQL returned ${allCrops?.length ?? 0} rows`);
+      cropArray = (rows as any[]) || [];
+      console.log(`[CropSelection] Raw mysql2 returned ${cropArray.length} rows`);
     } catch (tableErr: any) {
       console.error(`[CropSelection] Table query failed:`, tableErr.message);
       await sendWhatsAppMessage(phoneNumber,
-        `📋 *Crop Knowledge*\n\nCrop database table not found.\n\nAdd crops via the dashboard.\n\n(Error: ${tableErr.message})`);
+        `📋 *Crop Knowledge*\n\nCrop database table not found.\n\nPlease add crops via the dashboard.\n\n(Error: ${tableErr.message})`);
       return;
     }
 
-    // Handle array wrapper
-    const cropArray = Array.isArray(allCrops) ? allCrops : [];
+    // Filter active and deduplicate
     const activeCrops = cropArray.filter((c: any) => c && c.is_active !== 0 && c.is_active !== false);
     const seen = new Set<string>();
     const crops = activeCrops.filter((c: any) => {
@@ -1106,7 +1105,7 @@ async function sendCropSelectionList(phoneNumber: string, lang: string) {
       return;
     }
 
-    // Build text message with crop list
+    // Build text message
     const cropNames = crops.map((c: any, i: number) => {
       const name = lang === "telugu" && c.crop_name_telugu ? c.crop_name_telugu
         : lang === "hindi" && c.crop_name_hindi ? c.crop_name_hindi
@@ -1131,22 +1130,21 @@ async function sendCropSelectionList(phoneNumber: string, lang: string) {
 
 // Check if a text message matches a crop name in the DB
 async function findCropByName(message: string): Promise<string | null> {
-  const db = getDb();
   try {
     const clean = message.trim().toLowerCase();
     if (clean.length < 2) return null;
 
-    // Use raw SQL
-    let result: any;
+    const pool = getRawPool();
+    let rows: any[] = [];
     try {
-      result = await db.execute(
-        sql`SELECT crop_name FROM crop_knowledge WHERE LOWER(crop_name) = ${clean} OR LOWER(crop_name) LIKE ${"%" + clean + "%"} LIMIT 1`
+      const [result] = await pool.execute(
+        "SELECT crop_name FROM crop_knowledge WHERE LOWER(crop_name) = ? OR LOWER(crop_name) LIKE ? LIMIT 1",
+        [clean, "%" + clean + "%"]
       );
+      rows = (result as any[]) || [];
     } catch { return null; }
 
-    const rows = result?.rows || result || [];
-    const arr = Array.isArray(rows) ? rows : [];
-    if (arr.length > 0 && arr[0]?.crop_name) return arr[0].crop_name;
+    if (rows.length > 0 && rows[0]?.crop_name) return rows[0].crop_name;
     return null;
   } catch (e: any) {
     console.error(`[CropMatch] Error:`, e.message);
@@ -1156,27 +1154,26 @@ async function findCropByName(message: string): Promise<string | null> {
 
 // Get detailed advice for a specific crop
 async function getCropAdviceByName(cropName: string, lang: string): Promise<string> {
-  const db = getDb();
   try {
     const cleanName = cropName.replace(/^crop_/, "").replace(/_/g, " ");
 
-    // Use raw SQL
-    let result: any;
+    const pool = getRawPool();
+    let rows: any[] = [];
     try {
-      result = await db.execute(
-        sql`SELECT * FROM crop_knowledge WHERE LOWER(crop_name) = LOWER(${cleanName}) LIMIT 1`
+      const [result] = await pool.execute(
+        "SELECT * FROM crop_knowledge WHERE LOWER(crop_name) = LOWER(?) LIMIT 1",
+        [cleanName]
       );
-    } catch (tableErr: any) {
+      rows = (result as any[]) || [];
+    } catch {
       return `💡 *Crop Advice*\n\nCrop database not found.\n\nAdd crops via the dashboard.`;
     }
 
-    const rows = result?.rows || result || [];
-    const arr = Array.isArray(rows) ? rows : [];
-    if (arr.length === 0) {
+    if (rows.length === 0) {
       return `💡 *Crop Advice*\n\nNo advice found for "${cleanName}".\n\nType "menu" to see all crops.`;
     }
 
-    const c = arr[0];
+    const c = rows[0];
     const name = lang === "telugu" && c.crop_name_telugu ? c.crop_name_telugu
       : lang === "hindi" && c.crop_name_hindi ? c.crop_name_hindi
       : c.crop_name;
