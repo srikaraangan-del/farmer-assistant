@@ -1073,51 +1073,44 @@ async function sendCropSelectionList(phoneNumber: string, lang: string) {
   try {
     console.log(`[CropSelection] Fetching crops for lang=${lang}`);
 
-    // Try without WHERE first to check if table exists
+    // Use RAW SQL to avoid Drizzle ORM issues
     let allCrops: any[] = [];
     try {
-      allCrops = await db.select({
-        cropName: cropKnowledge.cropName,
-        cropNameTelugu: cropKnowledge.cropNameTelugu,
-        cropNameHindi: cropKnowledge.cropNameHindi,
-        variety: cropKnowledge.variety,
-        isActive: cropKnowledge.isActive,
-      }).from(cropKnowledge);
-      console.log(`[CropSelection] Raw query returned ${allCrops?.length ?? 0} rows`);
+      const result = await db.execute(
+        sql`SELECT crop_name, crop_name_telugu, crop_name_hindi, variety, is_active FROM crop_knowledge LIMIT 100`
+      );
+      allCrops = result.rows || result || [];
+      console.log(`[CropSelection] Raw SQL returned ${allCrops?.length ?? 0} rows`);
     } catch (tableErr: any) {
       console.error(`[CropSelection] Table query failed:`, tableErr.message);
-      await sendWhatsAppMessage(phoneNumber, lang === "telugu" ? `📋 *పంట జ్ఞానం*\n\nపంటల డేటాబేస్ టేబుల్ లేదు.\n\nడాష్‌బోర్డ్‌లో పంటలను జోడించండి.`
-        : lang === "hindi" ? `📋 *फसल ज्ञान*\n\nफसल डेटाबेस टेबल नहीं मिला।\n\nडैशबोर्ड में फसलें जोड़ें।`
-        : `📋 *Crop Knowledge*\n\nCrop database table not found.\n\nAdd crops via the dashboard.\n\n(Error: ${tableErr.message})`);
+      await sendWhatsAppMessage(phoneNumber,
+        `📋 *Crop Knowledge*\n\nCrop database table not found.\n\nAdd crops via the dashboard.\n\n(Error: ${tableErr.message})`);
       return;
     }
 
-    // Filter active crops in JS
-    const activeCrops = (allCrops || []).filter((c: any) => c && c.isActive !== false);
+    // Handle array wrapper
+    const cropArray = Array.isArray(allCrops) ? allCrops : [];
+    const activeCrops = cropArray.filter((c: any) => c && c.is_active !== 0 && c.is_active !== false);
     const seen = new Set<string>();
     const crops = activeCrops.filter((c: any) => {
-      if (!c || !c.cropName || seen.has(c.cropName)) return false;
-      seen.add(c.cropName);
+      if (!c || !c.crop_name || seen.has(c.crop_name)) return false;
+      seen.add(c.crop_name);
       return true;
     });
 
     console.log(`[CropSelection] Found ${crops.length} unique crops`);
 
     if (crops.length === 0) {
-      const noCropsMsg = lang === "telugu"
-        ? "📋 *పంట జ్ఞానం*\n\nపంటల డేటాబేస్‌లో ఇంకా ఏ పంటలు లేవు.\n\nడాష్‌బోర్డ్‌లో పంటలను జోడించండి."
-        : lang === "hindi"
-        ? "📋 *फसल ज्ञान*\n\nफसल डेटाबेस में अभी कोई फसल नहीं।\n\nडैशबोर्ड में फसलें जोड़ें।"
-        : "📋 *Crop Knowledge*\n\nNo crops in the database yet.\n\nAdd crops via the dashboard.";
-      await sendWhatsAppMessage(phoneNumber, noCropsMsg);
+      await sendWhatsAppMessage(phoneNumber,
+        `📋 *Crop Knowledge*\n\nNo crops in the database yet.\n\nAdd crops via the dashboard.`);
       return;
     }
 
     // Build text message with crop list
     const cropNames = crops.map((c: any, i: number) => {
-      const name = lang === "telugu" && c.cropNameTelugu ? c.cropNameTelugu
-        : lang === "hindi" && c.cropNameHindi ? c.cropNameHindi
-        : c.cropName;
+      const name = lang === "telugu" && c.crop_name_telugu ? c.crop_name_telugu
+        : lang === "hindi" && c.crop_name_hindi ? c.crop_name_hindi
+        : c.crop_name;
       return `${i + 1}. ${name}${c.variety ? ` (${c.variety})` : ""}`;
     }).join("\n");
 
@@ -1132,9 +1125,7 @@ async function sendCropSelectionList(phoneNumber: string, lang: string) {
     await sendWhatsAppMessage(phoneNumber, header + "\n\n" + cropNames + footer);
   } catch (e: any) {
     console.error(`[CropSelection] CRITICAL ERROR:`, e.message, e.stack);
-    await sendWhatsAppMessage(phoneNumber, lang === "telugu" ? `పంటల జాబితా లోపం: ${e.message}`
-      : lang === "hindi" ? `फसल सूची त्रुटि: ${e.message}`
-      : `Crop list error: ${e.message}`);
+    await sendWhatsAppMessage(phoneNumber, `Crop list error: ${e.message}`);
   }
 }
 
@@ -1145,26 +1136,17 @@ async function findCropByName(message: string): Promise<string | null> {
     const clean = message.trim().toLowerCase();
     if (clean.length < 2) return null;
 
-    // Try exact match
-    let exact: any[] = [];
+    // Use raw SQL
+    let result: any;
     try {
-      exact = await db.select({ cropName: cropKnowledge.cropName })
-        .from(cropKnowledge)
-        .where(sql`LOWER(${cropKnowledge.cropName}) = ${clean}`)
-        .limit(1);
-    } catch { /* table may not exist */ }
-    if (exact && exact.length > 0) return exact[0].cropName;
+      result = await db.execute(
+        sql`SELECT crop_name FROM crop_knowledge WHERE LOWER(crop_name) = ${clean} OR LOWER(crop_name) LIKE ${"%" + clean + "%"} LIMIT 1`
+      );
+    } catch { return null; }
 
-    // Try partial match
-    let partial: any[] = [];
-    try {
-      partial = await db.select({ cropName: cropKnowledge.cropName })
-        .from(cropKnowledge)
-        .where(sql`LOWER(${cropKnowledge.cropName}) LIKE ${"%" + clean + "%"}`)
-        .limit(1);
-    } catch { /* table may not exist */ }
-    if (partial && partial.length > 0) return partial[0].cropName;
-
+    const rows = result?.rows || result || [];
+    const arr = Array.isArray(rows) ? rows : [];
+    if (arr.length > 0 && arr[0]?.crop_name) return arr[0].crop_name;
     return null;
   } catch (e: any) {
     console.error(`[CropMatch] Error:`, e.message);
@@ -1178,33 +1160,29 @@ async function getCropAdviceByName(cropName: string, lang: string): Promise<stri
   try {
     const cleanName = cropName.replace(/^crop_/, "").replace(/_/g, " ");
 
-    let crops: any[] = [];
+    // Use raw SQL
+    let result: any;
     try {
-      crops = await db.select()
-        .from(cropKnowledge)
-        .where(sql`LOWER(${cropKnowledge.cropName}) = LOWER(${cleanName})`)
-        .limit(1);
+      result = await db.execute(
+        sql`SELECT * FROM crop_knowledge WHERE LOWER(crop_name) = LOWER(${cleanName}) LIMIT 1`
+      );
     } catch (tableErr: any) {
-      console.error(`[CropAdvice] Table error:`, tableErr.message);
-      return `💡 *Crop Advice*\n\nCrop knowledge database not found.\n\nPlease add crops via the dashboard.`;
+      return `💡 *Crop Advice*\n\nCrop database not found.\n\nAdd crops via the dashboard.`;
     }
 
-    if (!crops || crops.length === 0) {
-      const notFound: Record<string, string> = {
-        english: `💡 *Crop Advice*\n\nNo advice found for "${cleanName}".\n\nType "menu" to see all crops.`,
-        hindi: `💡 *फसल सलाह*\n\n"${cleanName}" के लिए कोई सलाह नहीं।\n\nसभी फसलें देखने के लिए "menu" टाइप करें।`,
-        telugu: `💡 *పంట సలహా*\n\n"${cleanName}" కు సలహా లభించలేదు.\n\nఅన్ని పంటలను చూడటానికి "menu" టైప్ చేయండి.`,
-      };
-      return notFound[lang] ?? notFound.english;
+    const rows = result?.rows || result || [];
+    const arr = Array.isArray(rows) ? rows : [];
+    if (arr.length === 0) {
+      return `💡 *Crop Advice*\n\nNo advice found for "${cleanName}".\n\nType "menu" to see all crops.`;
     }
 
-    const c = crops[0];
-    const name = lang === "telugu" && c.cropNameTelugu ? c.cropNameTelugu
-      : lang === "hindi" && c.cropNameHindi ? c.cropNameHindi
-      : c.cropName;
+    const c = arr[0];
+    const name = lang === "telugu" && c.crop_name_telugu ? c.crop_name_telugu
+      : lang === "hindi" && c.crop_name_hindi ? c.crop_name_hindi
+      : c.crop_name;
     const title = c.title || "Farming Advice";
-    const content = lang === "telugu" && c.contentTelugu ? c.contentTelugu
-      : lang === "hindi" && c.contentHindi ? c.contentHindi
+    const content = lang === "telugu" && c.content_telugu ? c.content_telugu
+      : lang === "hindi" && c.content_hindi ? c.content_hindi
       : c.content || "No detailed content available.";
 
     let response = `💡 *${name}${c.variety ? ` (${c.variety})` : ""}*\n`;
@@ -1212,9 +1190,9 @@ async function getCropAdviceByName(cropName: string, lang: string): Promise<stri
     response += `${content}\n\n`;
 
     if (c.fertilizer) response += `🌱 *Fertilizer:* ${c.fertilizer}\n`;
-    if (c.pestControl) response += `🐛 *Pest Control:* ${c.pestControl}\n`;
+    if (c.pest_control) response += `🐛 *Pest Control:* ${c.pest_control}\n`;
     if (c.watering) response += `💧 *Watering:* ${c.watering}\n`;
-    if (c.harvestingTips) response += `🌾 *Harvesting:* ${c.harvestingTips}\n`;
+    if (c.harvesting_tips) response += `🌾 *Harvesting:* ${c.harvesting_tips}\n`;
     if (c.season) response += `📅 *Season:* ${c.season}\n`;
     if (c.region) response += `📍 *Region:* ${c.region}\n`;
 
