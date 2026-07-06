@@ -181,9 +181,34 @@ async function processIncomingMessage(phoneNumber: string, message: string, cont
       return;
     }
   } else {
-    // Text message — detect intent and check for menu trigger
-    intent = detectIntent(message);
+    // Text message — detect intent and check for special cases
     const lowerMsg = message.toLowerCase().trim();
+
+    // Check if message is a 6-digit pincode → save and get weather
+    if (/^\d{6}$/.test(message.trim())) {
+      console.log(`[WhatsApp] Detected 6-digit pincode: ${message}`);
+      const farmerLang = farmer[0]?.preferredLanguage ?? "english";
+      const farmerDist = farmer[0]?.district;
+      const farmerSt = farmer[0]?.state;
+      await db.update(farmers).set({ pincode: message.trim() }).where(eq(farmers.id, farmerId));
+      const weatherMsg = await getWeatherResponse(farmerDist ?? "", farmerSt ?? "", farmerLang, message.trim());
+      await sendWhatsAppMessage(phoneNumber, weatherMsg);
+      await sendMainMenu(phoneNumber, farmerLang);
+      return;
+    }
+
+    // Check if message matches a crop name (text-based crop selection)
+    const cropMatch = await findCropByName(message.trim());
+    if (cropMatch) {
+      console.log(`[WhatsApp] Matched crop: ${cropMatch}`);
+      const farmerLang = farmer[0]?.preferredLanguage ?? "english";
+      const cropAdvice = await getCropAdviceByName(`crop_${cropMatch.toLowerCase().replace(/\s+/g, "_")}`, farmerLang);
+      await sendWhatsAppMessage(phoneNumber, cropAdvice);
+      await sendMainMenu(phoneNumber, farmerLang);
+      return;
+    }
+
+    intent = detectIntent(message);
     // "menu", "hello", "hi", "namaste" should trigger the main menu
     if (lowerMsg === "menu" || lowerMsg === "hello" || lowerMsg === "hi" || lowerMsg === "hey" ||
         lowerMsg === "namaste" || lowerMsg === "namaskaram" || lowerMsg === "start" ||
@@ -246,8 +271,21 @@ async function processIncomingMessage(phoneNumber: string, message: string, cont
     if (isMenuAction && intent === "language_change") {
       await sendLanguageMenu(phoneNumber);
     } else if (isMenuAction && intent === "crop_knowledge") {
-      // Show crop selection list instead of generic advice
+      // Show crop selection text list
       await sendCropSelectionList(phoneNumber, lang);
+    } else if (isMenuAction && intent === "weather") {
+      // Weather: use pincode if available, otherwise ask for it
+      if (farmerPincode) {
+        const weatherMsg = await getWeatherResponse(farmerDistrict ?? "", farmerState ?? "", lang, farmerPincode);
+        await sendWhatsAppMessage(phoneNumber, weatherMsg);
+        await sendMainMenu(phoneNumber, lang);
+      } else {
+        // Ask farmer to enter pincode
+        const askPincode = lang === "telugu" ? `🌦️ *వాతావరణం*\n\nమీ ఏరియా పిన్‌కోడ్‌ను పంపండి (ఉదా: 500001).\n\nపిన్‌కోడ్ ఆధారంగా వాతావరణ సమాచారం అందిస్తాము.`
+          : lang === "hindi" ? `🌦️ *मौसम*\n\nकृपया अपना एरिया पिनकोड भेजें (जैसे: 500001)。\n\nहम पिनकोड के आधार पर मौसम की जानकारी देंगे।`
+          : `🌦️ *Weather*\n\nPlease send your area pincode (e.g., 500001).\n\nWe'll provide weather based on your pincode.`;
+        await sendWhatsAppMessage(phoneNumber, askPincode);
+      }
     } else if (isMenuAction) {
       await sendWhatsAppMessage(phoneNumber, aiResponse);
       await sendMainMenu(phoneNumber, lang);
@@ -1035,7 +1073,6 @@ async function sendCropSelectionList(phoneNumber: string, lang: string) {
   try {
     console.log(`[CropSelection] Fetching crops for lang=${lang}`);
 
-    // Fetch all active crops, deduplicate in JS (avoids GROUP BY issues)
     const allCrops = await db.select({
       cropName: cropKnowledge.cropName,
       cropNameTelugu: cropKnowledge.cropNameTelugu,
@@ -1045,62 +1082,85 @@ async function sendCropSelectionList(phoneNumber: string, lang: string) {
       .from(cropKnowledge)
       .where(eq(cropKnowledge.isActive, true));
 
-    // Deduplicate by cropName, keep first occurrence
     const seen = new Set<string>();
     const crops = allCrops.filter((c) => {
-      if (seen.has(c.cropName)) return false;
+      if (!c.cropName || seen.has(c.cropName)) return false;
       seen.add(c.cropName);
       return true;
     });
 
-    console.log(`[CropSelection] Found ${crops.length} unique crops from ${allCrops.length} rows`);
-
-    const headers: Record<string, { header: string; body: string; footer: string; button: string }> = {
-      english: { header: "Crop Knowledge", body: "Select a crop to get detailed farming advice:", footer: "Tap the button below to see crops", button: "Select Crop" },
-      hindi: { header: "फसल ज्ञान", body: "विस्तृत कृषि सलाह के लिए एक फसल चुनें:", footer: "फसल देखने के लिए नीचे बटन दबाएं", button: "फसल चुनें" },
-      telugu: { header: "పంట జ్ఞానం", body: "వివరణాత్మక వ్యవసాయ సలహా కోసం పంటను ఎంచుకోండి:", footer: "పంటలను చూడటానికి కింది బటన్ నొక్కండి", button: "పంట ఎంచుకోండి" },
-    };
-    const h = headers[lang] ?? headers.english;
+    console.log(`[CropSelection] Found ${crops.length} unique crops`);
 
     if (crops.length === 0) {
-      console.log(`[CropSelection] No crops in DB`);
-      await sendWhatsAppMessage(phoneNumber, lang === "telugu" ? "పంటల జ్ఞానం డేటాబేస్‌లో ఇంకా ఏ పంటలు జోడించబడలేదు.\n\n_Admin can add crops via the dashboard._"
-        : lang === "hindi" ? "फसल ज्ञान डेटाबेस में अभी कोई फसल नहीं जोड़ी गई।\n\n_एडमिन डैशबोर्ड से फसलें जोड़ सकते हैं।_"
-        : "No crops added to the knowledge database yet.\n\n_Admin can add crops via the dashboard._");
+      const noCropsMsg = lang === "telugu"
+        ? "📋 *పంట జ్ఞానం*\n\nపంటల డేటాబేస్‌లో ఇంకా ఏ పంటలు లేవు.\n\nడాష్‌బోర్డ్‌లో పంటలను జోడించండి."
+        : lang === "hindi"
+        ? "📋 *फसल ज्ञान*\n\nफसल डेटाबेस में अभी कोई फसल नहीं।\n\nडैशबोर्ड में फसलें जोड़ें।"
+        : "📋 *Crop Knowledge*\n\nNo crops in the database yet.\n\nAdd crops via the dashboard.";
+      await sendWhatsAppMessage(phoneNumber, noCropsMsg);
       return;
     }
 
-    const rows = crops.map((c) => {
+    // Build text message with crop list - RELIABLE, no interactive list
+    const cropNames = crops.map((c, i) => {
       const name = lang === "telugu" && c.cropNameTelugu ? c.cropNameTelugu
         : lang === "hindi" && c.cropNameHindi ? c.cropNameHindi
         : c.cropName;
-      const varietyLabel = c.variety ? ` (${c.variety})` : "";
-      return {
-        id: `crop_${c.cropName.toLowerCase().replace(/\s+/g, "_")}`,
-        title: `${name}${varietyLabel}`.slice(0, 24),
-        description: lang === "telugu" ? `${name} పంట సలహా పొందండి`
-          : lang === "hindi" ? `${name} की विस्तृत सलाह प्राप्त करें`
-          : `Get detailed advice for ${name}`,
-      };
-    });
+      return `${i + 1}. ${name}${c.variety ? ` (${c.variety})` : ""}`;
+    }).join("\n");
 
-    console.log(`[CropSelection] Sending list with ${rows.length} crops`);
-    const success = await sendWhatsAppList(phoneNumber, h.header, h.body, h.footer, h.button, [{
-      title: lang === "telugu" ? "పంటల జాబితా" : lang === "hindi" ? "फसल सूची" : "Crop List",
-      rows,
-    }]);
+    const header = lang === "telugu" ? `📋 *పంట జ్ఞానం*\n\nవివరాల కోసం పంట పేరును టైప్ చేయండి:`
+      : lang === "hindi" ? `📋 *फसल ज्ञान*\n\nविवरण के लिए फसल का नाम टाइप करें:`
+      : `📋 *Crop Knowledge*\n\nType a crop name for detailed advice:`;
 
-    if (!success) {
-      console.error(`[CropSelection] sendWhatsAppList returned false`);
-      await sendWhatsAppMessage(phoneNumber, lang === "telugu" ? "మెనూ పంపడంలో లోపం.\n\nపంట పేరు టైప్ చేయండి (ఉదా: Rice, Cotton)."
-        : lang === "hindi" ? "मेनू भेजने में त्रुटि।\n\nफसल का नाम टाइप करें (जैसे: Rice, Cotton)。"
-        : "Error sending menu.\n\nType a crop name (e.g., Rice, Cotton).");
-    }
+    const footer = lang === "telugu" ? `\n\n_పైన ఉన్న ఏదైనా పంట పేరును టైప్ చేయండి_`
+      : lang === "hindi" ? `\n\n_ऊपर किसी भी फसल का नाम टाइप करें_`
+      : `\n\n_Type any crop name from above_`;
+
+    await sendWhatsAppMessage(phoneNumber, header + "\n\n" + cropNames + footer);
   } catch (e: any) {
-    console.error(`[CropSelection] CRITICAL ERROR:`, e.message, e.stack);
-    await sendWhatsAppMessage(phoneNumber, lang === "telugu" ? `పంటల జాబితా లోడ్ చేయడంలో లోపం: ${e.message}`
-      : lang === "hindi" ? `फसल सूची लोड करने में त्रुटि: ${e.message}`
-      : `Error loading crop list: ${e.message}`);
+    console.error(`[CropSelection] CRITICAL ERROR:`, e.message);
+    await sendWhatsAppMessage(phoneNumber, lang === "telugu" ? `పంటల జాబితా లోపం: ${e.message}`
+      : lang === "hindi" ? `फसल सूची त्रुटि: ${e.message}`
+      : `Crop list error: ${e.message}`);
+  }
+}
+
+// Check if a text message matches a crop name in the DB
+async function findCropByName(message: string): Promise<string | null> {
+  const db = getDb();
+  try {
+    const clean = message.trim().toLowerCase();
+    if (clean.length < 2) return null;
+
+    // Try exact match on cropName
+    const exact = await db.select({ cropName: cropKnowledge.cropName })
+      .from(cropKnowledge)
+      .where(
+        and(
+          eq(cropKnowledge.isActive, true),
+          sql`LOWER(${cropKnowledge.cropName}) = ${clean}`
+        )
+      )
+      .limit(1);
+    if (exact.length > 0) return exact[0].cropName;
+
+    // Try LIKE match (partial)
+    const partial = await db.select({ cropName: cropKnowledge.cropName })
+      .from(cropKnowledge)
+      .where(
+        and(
+          eq(cropKnowledge.isActive, true),
+          sql`LOWER(${cropKnowledge.cropName}) LIKE ${"%" + clean + "%"}`
+        )
+      )
+      .limit(1);
+    if (partial.length > 0) return partial[0].cropName;
+
+    return null;
+  } catch (e: any) {
+    console.error(`[CropMatch] Error:`, e.message);
+    return null;
   }
 }
 
