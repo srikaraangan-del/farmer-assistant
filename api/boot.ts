@@ -157,6 +157,14 @@ async function processIncomingMessage(phoneNumber: string, message: string, cont
     intent = result.intent;
     isMenuAction = result.isMenuAction;
 
+    // Handle crop selection (e.g., crop_rice, crop_cotton)
+    if (result.isCropSelection) {
+      const cropAdvice = await getCropAdviceByName(intent, lang);
+      await sendWhatsAppMessage(phoneNumber, cropAdvice);
+      await sendMainMenu(phoneNumber, lang);
+      return;
+    }
+
     // Handle language change
     if (intent.startsWith("set_language_")) {
       const newLang = intent.replace("set_language_", "");
@@ -237,6 +245,9 @@ async function processIncomingMessage(phoneNumber: string, message: string, cont
     console.log(`[WhatsApp] Step 6: Sending response... menuAction=${isMenuAction}, intent=${intent}`);
     if (isMenuAction && intent === "language_change") {
       await sendLanguageMenu(phoneNumber);
+    } else if (isMenuAction && intent === "crop_knowledge") {
+      // Show crop selection list instead of generic advice
+      await sendCropSelectionList(phoneNumber, lang);
     } else if (isMenuAction) {
       await sendWhatsAppMessage(phoneNumber, aiResponse);
       await sendMainMenu(phoneNumber, lang);
@@ -502,7 +513,7 @@ async function sendLanguageMenu(phoneNumber: string) {
 }
 
 // Handle interactive list/button replies
-function handleInteractiveReply(replyId: string, lang: string): { intent: string; isMenuAction: boolean } {
+function handleInteractiveReply(replyId: string, lang: string): { intent: string; isMenuAction: boolean; isCropSelection: boolean } {
   // Map reply IDs to intents
   const intentMap: Record<string, string> = {
     weather: "weather",
@@ -516,10 +527,13 @@ function handleInteractiveReply(replyId: string, lang: string): { intent: string
     lang_hindi: "set_language_hindi",
   };
 
-  const intent = intentMap[replyId] ?? "general";
+  // Check if this is a crop selection (e.g., "crop_rice", "crop_cotton")
+  const isCropSelection = replyId.startsWith("crop_");
+
+  const intent = isCropSelection ? replyId : (intentMap[replyId] ?? "general");
   const isMenuAction = ["weather", "prices", "schemes", "crops", "news", "language"].includes(replyId);
 
-  return { intent, isMenuAction };
+  return { intent, isMenuAction, isCropSelection };
 }
 
 // Geocode a pincode using Open-Meteo
@@ -1010,6 +1024,118 @@ async function formatCropAdviceFromDB(lang: string, farmerCrop?: string | null):
   } catch (e: any) {
     console.error("[CropAdvice] DB error:", e.message);
     return `💡 *Farming Advice*\n\nUnable to fetch advice. Please try again later.`;
+  }
+}
+
+// ====== CROP SELECTION & ADVICE FLOW ======
+
+// Fetch all distinct crops from DB and send as WhatsApp list
+async function sendCropSelectionList(phoneNumber: string, lang: string) {
+  const db = getDb();
+  try {
+    const crops = await db.select({
+      cropName: cropKnowledge.cropName,
+      cropNameTelugu: cropKnowledge.cropNameTelugu,
+      cropNameHindi: cropKnowledge.cropNameHindi,
+      variety: cropKnowledge.variety,
+    })
+      .from(cropKnowledge)
+      .where(eq(cropKnowledge.isActive, true))
+      .groupBy(cropKnowledge.cropName);
+
+    const headers: Record<string, { header: string; body: string; footer: string; button: string }> = {
+      english: { header: "Crop Knowledge", body: "Select a crop to get detailed farming advice:", footer: "Tap the button below to see crops", button: "Select Crop" },
+      hindi: { header: "फसल ज्ञान", body: "विस्तृत कृषि सलाह के लिए एक फसल चुनें:", footer: "फसल देखने के लिए नीचे बटन दबाएं", button: "फसल चुनें" },
+      telugu: { header: "పంట జ్ఞానం", body: "వివరణాత్మక వ్యవసాయ సలహా కోసం పంటను ఎంచుకోండి:", footer: "పంటలను చూడటానికి కింది బటన్ నొక్కండి", button: "పంట ఎంచుకోండి" },
+    };
+    const h = headers[lang] ?? headers.english;
+
+    if (crops.length === 0) {
+      await sendWhatsAppMessage(phoneNumber, lang === "telugu" ? "పంటల జ్ఞానం డేటాబేస్‌లో ఇంకా ఏ పంటలు జోడించబడలేదు."
+        : lang === "hindi" ? "फसल ज्ञान डेटाबेस में अभी कोई फसल नहीं जोड़ी गई।"
+        : "No crops added to the knowledge database yet.");
+      return;
+    }
+
+    const rows = crops.map((c) => {
+      const name = lang === "telugu" && c.cropNameTelugu ? c.cropNameTelugu
+        : lang === "hindi" && c.cropNameHindi ? c.cropNameHindi
+        : c.cropName;
+      const varietyLabel = c.variety ? ` (${c.variety})` : "";
+      return {
+        id: `crop_${c.cropName.toLowerCase().replace(/\s+/g, "_")}`,
+        title: `${name}${varietyLabel}`.slice(0, 24),
+        description: lang === "telugu" ? `${name} పంపిణీ సలహా పొందండి`
+          : lang === "hindi" ? `${name} की विस्तृत सलाह प्राप्त करें`
+          : `Get detailed advice for ${name}`,
+      };
+    });
+
+    await sendWhatsAppList(phoneNumber, h.header, h.body, h.footer, h.button, [{
+      title: lang === "telugu" ? "పంటల జాబితా" : lang === "hindi" ? "फसल सूची" : "Crop List",
+      rows,
+    }]);
+  } catch (e: any) {
+    console.error("[CropSelection] Error:", e.message);
+    await sendWhatsAppMessage(phoneNumber, lang === "telugu" ? "పంటల జాబితా లోడ్ చేయడంలో లోపం."
+      : lang === "hindi" ? "फसल सूची लोड करने में त्रुटि।"
+      : "Error loading crop list.");
+  }
+}
+
+// Get detailed advice for a specific crop
+async function getCropAdviceByName(cropName: string, lang: string): Promise<string> {
+  const db = getDb();
+  try {
+    // Remove the "crop_" prefix and replace underscores with spaces
+    const cleanName = cropName.replace(/^crop_/, "").replace(/_/g, " ");
+
+    const crops = await db.select()
+      .from(cropKnowledge)
+      .where(
+        and(
+          eq(cropKnowledge.isActive, true),
+          sql`LOWER(${cropKnowledge.cropName}) = LOWER(${cleanName})`
+        )
+      )
+      .limit(1);
+
+    if (crops.length === 0) {
+      const notFound: Record<string, string> = {
+        english: `💡 *Crop Advice*\n\nSorry, no detailed advice found for "${cleanName}".\n\nType "menu" to see all available crops.`,
+        hindi: `💡 *फसल सलाह*\n\n"${cleanName}" के लिए कोई विस्तृत सलाह नहीं मिली।\n\nसभी उपलब्ध फसलें देखने के लिए "menu" टाइप करें।`,
+        telugu: `💡 *పంట సలహా*\n\n"${cleanName}" కు వివరణాత్మక సలహా లభించలేదు.\n\nఅన్ని పంటలను చూడటానికి "menu" టైప్ చేయండి.`,
+      };
+      return notFound[lang] ?? notFound.english;
+    }
+
+    const c = crops[0];
+    const name = lang === "telugu" && c.cropNameTelugu ? c.cropNameTelugu
+      : lang === "hindi" && c.cropNameHindi ? c.cropNameHindi
+      : c.cropName;
+    const title = lang === "telugu" && c.titleTelugu ? c.titleTelugu
+      : lang === "hindi" && c.titleHindi ? c.titleHindi
+      : c.title;
+    const content = lang === "telugu" && c.contentTelugu ? c.contentTelugu
+      : lang === "hindi" && c.contentHindi ? c.contentHindi
+      : c.content;
+
+    let response = `💡 *${name}${c.variety ? ` (${c.variety})` : ""}*\n`;
+    response += `*${title}*\n\n`;
+    response += `${content}\n\n`;
+
+    if (c.fertilizer) response += `🌱 *Fertilizer:* ${c.fertilizer}\n`;
+    if (c.pestControl) response += `🐛 *Pest Control:* ${c.pestControl}\n`;
+    if (c.watering) response += `💧 *Watering:* ${c.watering}\n`;
+    if (c.harvestingTips) response += `🌾 *Harvesting:* ${c.harvestingTips}\n`;
+    if (c.season) response += `📅 *Season:* ${c.season}\n`;
+    if (c.region) response += `📍 *Region:* ${c.region}\n`;
+
+    response += `\n_Type "menu" to see all options_`;
+    return response;
+  } catch (e: any) {
+    console.error("[CropAdvice] Error:", e.message);
+    return `💡 *Crop Advice*\n\nUnable to fetch advice. Please try again.`;
   }
 }
 
