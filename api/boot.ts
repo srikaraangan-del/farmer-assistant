@@ -157,6 +157,7 @@ async function processIncomingMessage(phoneNumber: string, message: string, cont
       if (isGreeting) {
         const askName = lang === "telugu" ? `నమస్కారం! నేను మీ Krishiva AI సహాయకుడిని.\n\nమీ పేరును చెప్పగలరా?`
           : lang === "hindi" ? `नमस्ते! मैं आपका Krishiva AI सहायक हूं।\n\nकृपया अपना नाम बताएं?`
+          : lang === "kannada" ? `ನಮಸ್ಕಾರ! ನಾನು ನಿಮ್ಮ Krishiva AI ಸಹಾಯಕ.\n\nದಯವಿಟ್ಟು ನಿಮ್ಮ ಹೆಸರನ್ನು ಹೇಳಿ?`
           : `Hello! I am your Krishiva AI assistant.\n\nMay I know your name?`;
         await sendWhatsAppMessage(phoneNumber, askName);
         return;
@@ -165,6 +166,7 @@ async function processIncomingMessage(phoneNumber: string, message: string, cont
       await db.update(farmers).set({ name: message.trim() }).where(eq(farmers.id, farmerId));
       const askState = lang === "telugu" ? `నమస్కారం ${message.trim()}!\n\nదయచేసి మీ రాష్ట్రాన్ని పంపండి (ఉదా: Andhra Pradesh):`
         : lang === "hindi" ? `नमस्ते ${message.trim()}!\n\nकृपया अपना राज्य भेजें (जैसे: Andhra Pradesh):`
+        : lang === "kannada" ? `ನಮಸ್ಕಾರ ${message.trim()}!\n\nದಯವಿಟ್ಟು ನಿಮ್ಮ ರಾಜ್ಯವನ್ನು ಕಳುಹಿಸಿ (ಉದಾ: Andhra Pradesh):`
         : `Namaskaram ${message.trim()}!\n\nPlease send your state (e.g., Andhra Pradesh):`;
       await sendWhatsAppMessage(phoneNumber, askState);
       return;
@@ -175,6 +177,7 @@ async function processIncomingMessage(phoneNumber: string, message: string, cont
       await db.update(farmers).set({ state: message.trim() }).where(eq(farmers.id, farmerId));
       const askDistrict = lang === "telugu" ? `ధన్యవాదాలు!\n\nదయచేసి మీ జిల్లాను పంపండి (ఉదా: East Godavari):`
         : lang === "hindi" ? `धन्यवाद!\n\nकृपया अपना जिला भेजें (जैसे: East Godavari):`
+        : lang === "kannada" ? `ಧನ್ಯವಾದಗಳು!\n\nದಯವಿಟ್ಟು ನಿಮ್ಮ ಜಿಲ್ಲೆಯನ್ನು ಕಳುಹಿಸಿ (ಉದಾ: East Godavari):`
         : `Thank you!\n\nPlease send your district (e.g., East Godavari):`;
       await sendWhatsAppMessage(phoneNumber, askDistrict);
       return;
@@ -185,6 +188,7 @@ async function processIncomingMessage(phoneNumber: string, message: string, cont
       await db.update(farmers).set({ district: message.trim() }).where(eq(farmers.id, farmerId));
       const askPincode = lang === "telugu" ? `బాగుంది!\n\nదయచేసి మీ పిన్‌కోడ్‌ను పంపండి (ఉదా: 533201):`
         : lang === "hindi" ? `बहुत बढ़िया!\n\nकृपया अपना पिनकोड भेजें (जैसे: 533201):`
+        : lang === "kannada" ? `ಅದ್ಭುತ!\n\nದಯವಿಟ್ಟು ನಿಮ್ಮ ಪಿನ್‌ಕೋಡ್‌ನ್ನು ಕಳುಹಿಸಿ (ಉದಾ: 533201):`
         : `Great!\n\nPlease send your pincode (e.g., 533201):`;
       await sendWhatsAppMessage(phoneNumber, askPincode);
       return;
@@ -198,6 +202,7 @@ async function processIncomingMessage(phoneNumber: string, message: string, cont
       } else {
         const retryPincode = lang === "telugu" ? `దయచేసి సరైన 6-అంకెల పిన్‌కోడ్‌ను పంపండి (ఉదా: 533201):`
           : lang === "hindi" ? `कृपया वैध 6-अंकीय पिनकोड भेजें (जैसे: 533201):`
+          : lang === "kannada" ? `ದಯವಿಟ್ಟು ಸರಿಯಾದ 6-ಅಂಕಿಯ ಪಿನ್‌ಕೋಡ್‌ನ್ನು ಕಳುಹಿಸಿ (ಉದಾ: 533201):`
           : `Please send a valid 6-digit pincode (e.g., 533201):`;
         await sendWhatsAppMessage(phoneNumber, retryPincode);
       }
@@ -209,6 +214,7 @@ async function processIncomingMessage(phoneNumber: string, message: string, cont
       await db.update(farmers).set({ primaryCrop: message.trim() }).where(eq(farmers.id, farmerId));
       const readyMsg = lang === "telugu" ? `అన్ని వివరాలు సేకరించబడ్డాయి ${farmerName}!\n\nమీ AI సహాయకుడు సిద్ధంగా ఉన్నాడు.`
         : lang === "hindi" ? `सभी जानकारी एकत्रित हो गई ${farmerName}!\n\nआपका AI सहायक तैयार है।`
+        : lang === "kannada" ? `ಎಲ್ಲಾ ವಿವರಗಳನ್ನು ಸಂಗ್ರಹಿಸಲಾಗಿದೆ ${farmerName}!\n\nನಿಮ್ಮ AI ಸಹಾಯಕ ಸಿದ್ಧವಾಗಿದೆ.`
         : `All details collected ${farmerName}!\n\nYour AI assistant is ready.`;
       await sendWhatsAppMessage(phoneNumber, readyMsg);
       await sendMainMenu(phoneNumber, lang);
@@ -257,6 +263,7 @@ async function processIncomingMessage(phoneNumber: string, message: string, cont
       // Confirm in new language
       const confirmText = newLang === "telugu" ? "భాష తెలుగుకు మార్చబడింది."
         : newLang === "hindi" ? "भाषा हिंदी में बदल दी गई है।"
+        : newLang === "kannada" ? "ಭಾಷೆಯನ್ನು ಕನ್ನಡಕ್ಕೆ ಬದಲಾಯಿಸಲಾಗಿದೆ."
         : "Language changed to English.";
       await sendWhatsAppMessage(phoneNumber, confirmText);
 
@@ -265,6 +272,7 @@ async function processIncomingMessage(phoneNumber: string, message: string, cont
       if (!farmerCrop) {
         const askCrop = newLang === "telugu" ? `అద్భుతం!\n\nదయచేసి మీ ప్రధాన పంటను పంపండి (ఉదా: Rice, Cotton):`
           : newLang === "hindi" ? `बहुत अच्छे!\n\nकृपया अपनी मुख्य फसल भेजें (जैसे: Rice, Cotton):`
+          : newLang === "kannada" ? `ಅದ್ಭುತ!\n\nದಯವಿಟ್ಟು ನಿಮ್ಮ ಪ್ರಧಾನ ಪಂಟವನ್ನು ಕಳುಹಿಸಿ (ಉದಾ: Rice, Cotton):`
           : `Excellent!\n\nPlease send your main crop (e.g., Rice, Cotton):`;
         await sendWhatsAppMessage(phoneNumber, askCrop);
       } else {
@@ -383,6 +391,7 @@ async function processIncomingMessage(phoneNumber: string, message: string, cont
         // Profile complete but no pincode - ask for it
         const askPincode = lang === "telugu" ? `🌦️ *వాతావరణం*\n\nమీ ఏరియా పిన్‌కోడ్‌ను పంపండి (ఉదా: 500001).`
           : lang === "hindi" ? `🌦️ *मौसम*\n\nकृपया अपना एरिया पिनकोड भेजें (जैसे: 500001)。`
+          : lang === "kannada" ? `🌦️ *ಹವಾಮಾನ*\n\nದಯವಿಟ್ಟು ನಿಮ್ಮ ಏರಿಯಾ ಪಿನ್‌ಕೋಡ್‌ನ್ನು ಕಳುಹಿಸಿ (ಉದಾ: 500001).`
           : `🌦️ *Weather*\n\nPlease send your area pincode (e.g., 500001).`;
         await sendWhatsAppMessage(phoneNumber, askPincode);
       }
@@ -587,7 +596,7 @@ const MAIN_MENU: Record<string, { header: string; body: string; footer: string; 
     }],
   },
   telugu: {
-    header: "కిసాన్ సాథి",
+    header: "Krishiva",
     body: "మీ ఎఐ వ్యవసాయ సహాయకుడు. ఒక సేవను ఎంచుకోండి:",
     footer: "ఎంపికలను చూడటానికి కింది బటన్ నొక్కండి",
     button: "సేవలు",
@@ -604,7 +613,7 @@ const MAIN_MENU: Record<string, { header: string; body: string; footer: string; 
     }],
   },
   hindi: {
-    header: "किसान साथी",
+    header: "Krishiva",
     body: "आपका AI कृषि सहायक। एक सेवा चुनें:",
     footer: "विकल्प देखने के लिए नीचे बटन दबाएं",
     button: "सेवाएं",
@@ -620,6 +629,23 @@ const MAIN_MENU: Record<string, { header: string; body: string; footer: string; 
       ],
     }],
   },
+  kannada: {
+    header: "ಕೃಷಿವ",
+    body: "ನಿಮ್ಮ AI ಕೃಷಿ ಸಹಾಯಕ. ಒಂದು ಸೇವೆಯನ್ನು ಆಯ್ಕೆಮಾಡಿ:",
+    footer: "ಎಂಪಿಕೆಗಳನ್ನು ನೋಡಲು ಕೆಳಗಿನ ಬಟನ್ ಒತ್ತಿರಿ",
+    button: "ಸೇವೆಗಳು",
+    sections: [{
+      title: "ಲಭ್ಯವಿರುವ ಸೇವೆಗಳು",
+      rows: [
+        { id: "weather", title: "ಹವಾಮಾನ", description: "ನಿಮ್ಮ ಪ್ರದೇಶದ ಹವಾಮಾನ ನವೀಕರಣ" },
+        { id: "prices", title: "ಮಾರುಕಟ್ಟೆ ಬೆಲೆ", description: "ಪಂಟಗಳ ಪ್ರಸ್ತುತ ಬೆಲೆ ಪರಿಶೀಲಿಸಿ" },
+        { id: "schemes", title: "ಸರ್ಕಾರಿ ಯೋಜನೆಗಳು", description: "ಅರ್ಹ ಸರ್ಕಾರಿ ಯೋಜನೆಗಳನ್ನು ಹುಡುಕಿ" },
+        { id: "crops", title: "ಪಂಟ ಜ್ಞಾನ", description: "ನಿಮ್ಮ ಪಂಟಗಳಿಗೆ ಕೃಷಿ ಸಲಹೆ ಪಡೆಯಿರಿ" },
+        { id: "news", title: "ದೈನಂದಿನ ಸುದ್ದಿ", description: "ತಾಜಾ ಕೃಷಿ ಸುದ್ದಿಗಳನ್ನು ಓದಿ" },
+        { id: "language", title: "ಭಾಷೆ ಬದಲಾಯಿಸಿ", description: "ತೆಲುಗು, ಹಿಂದಿ ಅಥವಾ ಇಂಗ್ಲಿಷ್‌ಗೆ ಬದಲಾಯಿಸಿ" },
+      ],
+    }],
+  },
 };
 
 // Language selection buttons
@@ -627,6 +653,7 @@ const LANGUAGE_BUTTONS = [
   { id: "lang_english", title: "English" },
   { id: "lang_telugu", title: "Telugu" },
   { id: "lang_hindi", title: "Hindi" },
+  { id: "lang_kannada", title: "Kannada" },
 ];
 
 // Send main menu as interactive list
@@ -666,6 +693,7 @@ function handleInteractiveReply(replyId: string, lang: string): { intent: string
     lang_english: "set_language_english",
     lang_telugu: "set_language_telugu",
     lang_hindi: "set_language_hindi",
+    lang_kannada: "set_language_kannada",
   };
 
   // Check if this is a crop selection (e.g., "crop_rice", "crop_cotton")
@@ -1441,15 +1469,15 @@ Your Krishiva is ready to help.
 Tap the menu below to get started 👇`,
       hindi: `🙏 *नमस्ते${farmerName ? ` ${farmerName}` : ""}!*
 
-आपका किसान साथी मदद के लिए तैयार है।
+आपका Krishiva मदद के लिए तैयार है।
 
 शुरू करने के लिए नीचे मेनू दबाएं 👇`,
       telugu: `🙏 *నమస్కారం${farmerName ? ` ${farmerName}` : ""}!*
 
-మీ కిసాన్ సాథి సహాయానికి సిద్ధంగా ఉన్నాడు।
+మీ Krishiva సహాయానికి సిద్ధంగా ఉన్నాడు।
 
 ప్రారంభించడానికి కింది మెనూను ట్యాప్ చేయండి 👇`,
-      kannada: `🙏 *ಕಿಸಾನ್ ಸಾಥಿಗೆ ಸ್ವಾಗತ!*
+      kannada: `🙏 *Krishiva ಗೆ ಸ್ವಾಗತ!*
 
 ನಿಮ್ಮ AI ಕೃಷಿ ಸಹಾಯಕ ಸಹಾಯಕ್ಕೆ ಸಿದ್ಧವಾಗಿದೆ।
 
@@ -1479,7 +1507,7 @@ I can help you with:
 • 💡 Farming advice
 
 Type "menu" anytime to see options!`,
-      hindi: `🤖 *किसान साथी*
+      hindi: `🤖 *Krishiva*
 
 मैं आपकी मदद कर सकता हूं:
 • 🌦️ मौसम की जानकारी
@@ -1488,7 +1516,7 @@ Type "menu" anytime to see options!`,
 • 💡 खेती सलाह
 
 "menu" टाइप करें विकल्प देखने के लिए!`,
-      telugu: `🤖 *కిసాన్ సాథి*
+      telugu: `🤖 *Krishiva*
 
 నేను మీకు సహాయం చేయగల విషయాలు:
 • 🌦️ వాతావరణ సమాచారం
@@ -1497,7 +1525,7 @@ Type "menu" anytime to see options!`,
 • 💡 వ్యవసాయ సలహా
 
 ఎప్పుడైనా "menu" టైప్ చేస్తే ఎంపికలు కనిపిస్తాయి!`,
-      kannada: `🤖 *ಕಿಸಾನ್ ಸಾಥಿ*
+      kannada: `🤖 *Krishiva*
 
 ನಾನು ನಿಮಗೆ ಸಹಾಯ ಮಾಡಬಹುದಾದ ವಿಷಯಗಳು:
 • 🌦️ ಹವಾಮಾನ ಮಾಹಿತಿ
