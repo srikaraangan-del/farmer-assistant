@@ -144,9 +144,21 @@ async function processIncomingMessage(phoneNumber: string, message: string, cont
   // Check if this message is providing missing profile info (not a menu command)
   const lowerMsg = message.toLowerCase().trim();
   const isMenuCommand = ["menu", "hello", "hi", "hey", "start", "సేవలు", "మెనూ", "मेनू"].includes(lowerMsg);
+  const is6DigitPincode = /^\d{6}$/.test(message.trim());
 
   if (!isMenuCommand && !interactiveId) {
     // Farmer is typing a response to a profile question
+
+    // Check 6-digit pincode FIRST (before name) to avoid saving pincode as name
+    if (is6DigitPincode && !farmerPincode) {
+      await db.update(farmers).set({ pincode: message.trim() }).where(eq(farmers.id, farmerId));
+      const askCrop = lang === "telugu" ? `అద్భుతం!\n\nదయచేసి మీ ప్రధాన పంటను పంపండి (ఉదా: Rice, Cotton):`
+        : lang === "hindi" ? `बहुत अच्छे!\n\nकृपया अपनी मुख्य फसल भेजें (जैसे: Rice, Cotton):`
+        : `Excellent!\n\nPlease send your main crop (e.g., Rice, Cotton):`;
+      await sendWhatsAppMessage(phoneNumber, askCrop);
+      return;
+    }
+
     if (!farmerName) {
       // Save name and ask for state
       await db.update(farmers).set({ name: message.trim() }).where(eq(farmers.id, farmerId));
@@ -170,14 +182,6 @@ async function processIncomingMessage(phoneNumber: string, message: string, cont
         : lang === "hindi" ? `बहुत बढ़िया!\n\nकृपया अपना पिनकोड भेजें (जैसे: 533201):`
         : `Great!\n\nPlease send your pincode (e.g., 533201):`;
       await sendWhatsAppMessage(phoneNumber, askPincode);
-      return;
-    }
-    if (!farmerPincode && /^\d{6}$/.test(message.trim())) {
-      await db.update(farmers).set({ pincode: message.trim() }).where(eq(farmers.id, farmerId));
-      const askCrop = lang === "telugu" ? `అద్భుతం!\n\nదయచేసి మీ ప్రధాన పంటను పంపండి (ఉదా: Rice, Cotton):`
-        : lang === "hindi" ? `बहुत अच्छे!\n\nकृपया अपनी मुख्य फसल भेजें (जैसे: Rice, Cotton):`
-        : `Excellent!\n\nPlease send your main crop (e.g., Rice, Cotton):`;
-      await sendWhatsAppMessage(phoneNumber, askCrop);
       return;
     }
     if (!farmerCrop) {
