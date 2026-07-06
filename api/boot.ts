@@ -315,6 +315,10 @@ async function processIncomingMessage(phoneNumber: string, message: string, cont
         lowerMsg === "సేవలు" || lowerMsg === "मेनू" || lowerMsg === "మెనూ") {
       isMenuAction = true;
     }
+    // Language change keywords should trigger language menu
+    if (intent === "language_change") {
+      isMenuAction = true;
+    }
   }
 
   // 4. Generate AI response with full error handling
@@ -648,13 +652,22 @@ const MAIN_MENU: Record<string, { header: string; body: string; footer: string; 
   },
 };
 
-// Language selection buttons
-const LANGUAGE_BUTTONS = [
-  { id: "lang_english", title: "English" },
-  { id: "lang_telugu", title: "Telugu" },
-  { id: "lang_hindi", title: "Hindi" },
-  { id: "lang_kannada", title: "Kannada" },
-];
+// Language selection list
+const LANGUAGE_LIST = {
+  header: "🌐 Language / భాష / भाषा / ಭಾಷೆ",
+  body: "Please choose your preferred language:\nकृपया अपनी भाषा चुनें:\nదయచేసి మీ భాషను ఎంచుకోండి:\nದಯವಿಟ್ಟು ನಿಮ್ಮ ಭಾಷೆಯನ್ನು ಆಯ್ಕೆಮಾಡಿ:",
+  footer: "Tap a language to switch",
+  button: "Select Language",
+  sections: [{
+    title: "Languages / భాషలు / भाषाएं / ಭಾಷೆಗಳು",
+    rows: [
+      { id: "lang_english", title: "English", description: "Continue in English" },
+      { id: "lang_telugu", title: "Telugu / తెలుగు", description: "తెలుగులో కొనసాగించండి" },
+      { id: "lang_hindi", title: "Hindi / हिन्दी", description: "हिंदी में जारी रखें" },
+      { id: "lang_kannada", title: "Kannada / ಕನ್ನಡ", description: "ಕನ್ನಡದಲ್ಲಿ ಮುಂದುವರಿಸಿ" },
+    ],
+  }],
+};
 
 // Send main menu as interactive list
 async function sendMainMenu(phoneNumber: string, lang: string) {
@@ -671,12 +684,12 @@ async function sendMainMenu(phoneNumber: string, lang: string) {
   }
 }
 
-// Send language selection buttons
+// Send language selection as list message (supports 4 languages)
 async function sendLanguageMenu(phoneNumber: string) {
-  const body = "Please choose your preferred language / कृपया अपनी भाषा चुनें / దయచేసి మీ భాషను ఎంచుకోండి:";
-  const success = await sendWhatsAppButtons(phoneNumber, body, LANGUAGE_BUTTONS);
+  const l = LANGUAGE_LIST;
+  const success = await sendWhatsAppList(phoneNumber, l.header, l.body, l.footer, l.button, l.sections);
   if (!success) {
-    await sendWhatsAppMessage(phoneNumber, "Please type your language: English, Telugu, or Hindi");
+    await sendWhatsAppMessage(phoneNumber, "Please type your language: English, Telugu, Hindi, or Kannada");
   }
 }
 
@@ -990,6 +1003,20 @@ function detectIntent(message: string): string {
         "ಮೆನು", "ಸೇವೆಗಳು", "ನಮಸ್ಕಾರ", "ಹಲೋ", "ಹಾಯ್",
       ],
       intent: "greeting",
+    },
+    {
+      keywords: [
+        "language", "bhasha", "basha", "bhasa", "lugha", "locale",
+        "telugu", "తెలుగు",
+        "hindi", "हिन्दी", "हिंदी",
+        "english", "ఆంగ్లం",
+        "kannada", "ಕನ್ನಡ",
+        "change language", "switch language", "language change",
+        "భాష మార్చు", "భాష మార్పిడి",
+        "भाषा बदलें", "भाषा परिवर्तन",
+        "ಭಾಷೆ ಬದಲಾಯಿಸಿ", "ಭಾಷೆ ಮಾರ್ಪಾಡು",
+      ],
+      intent: "language_change",
     },
     {
       keywords: ["voice", "audio", "speak", "call", "phone"],
