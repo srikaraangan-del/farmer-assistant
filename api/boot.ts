@@ -133,6 +133,64 @@ async function processIncomingMessage(phoneNumber: string, message: string, cont
     farmerId = farmer[0].id;
   }
 
+  // === FARMER ONBOARDING: Collect missing profile details ===
+  const lang = farmer[0]?.preferredLanguage ?? "english";
+  const farmerName = farmer[0]?.name;
+  const farmerState = farmer[0]?.state;
+  const farmerDistrict = farmer[0]?.district;
+  const farmerPincode = farmer[0]?.pincode;
+  const farmerCrop = farmer[0]?.primaryCrop;
+
+  // Check if this message is providing missing profile info (not a menu command)
+  const lowerMsg = message.toLowerCase().trim();
+  const isMenuCommand = ["menu", "hello", "hi", "hey", "start", "సేవలు", "మెనూ", "मेनू"].includes(lowerMsg);
+
+  if (!isMenuCommand && !interactiveId) {
+    // Farmer is typing a response to a profile question
+    if (!farmerName) {
+      // Save name and ask for state
+      await db.update(farmers).set({ name: message.trim() }).where(eq(farmers.id, farmerId));
+      const askState = lang === "telugu" ? `నమస్కారం ${message.trim()}!\n\nదయచేసి మీ రాష్ట్రాన్ని పంపండి (ఉదా: Andhra Pradesh):`
+        : lang === "hindi" ? `नमस्ते ${message.trim()}!\n\nकृपया अपना राज्य भेजें (जैसे: Andhra Pradesh):`
+        : `Namaskaram ${message.trim()}!\n\nPlease send your state (e.g., Andhra Pradesh):`;
+      await sendWhatsAppMessage(phoneNumber, askState);
+      return;
+    }
+    if (!farmerState) {
+      await db.update(farmers).set({ state: message.trim() }).where(eq(farmers.id, farmerId));
+      const askDistrict = lang === "telugu" ? `ధన్యవాదాలు!\n\nదయచేసి మీ జిల్లాను పంపండి (ఉదా: East Godavari):`
+        : lang === "hindi" ? `धन्यवाद!\n\nकृपया अपना जिला भेजें (जैसे: East Godavari):`
+        : `Thank you!\n\nPlease send your district (e.g., East Godavari):`;
+      await sendWhatsAppMessage(phoneNumber, askDistrict);
+      return;
+    }
+    if (!farmerDistrict) {
+      await db.update(farmers).set({ district: message.trim() }).where(eq(farmers.id, farmerId));
+      const askPincode = lang === "telugu" ? `బాగుంది!\n\nదయచేసి మీ పిన్‌కోడ్‌ను పంపండి (ఉదా: 533201):`
+        : lang === "hindi" ? `बहुत बढ़िया!\n\nकृपया अपना पिनकोड भेजें (जैसे: 533201):`
+        : `Great!\n\nPlease send your pincode (e.g., 533201):`;
+      await sendWhatsAppMessage(phoneNumber, askPincode);
+      return;
+    }
+    if (!farmerPincode && /^\d{6}$/.test(message.trim())) {
+      await db.update(farmers).set({ pincode: message.trim() }).where(eq(farmers.id, farmerId));
+      const askCrop = lang === "telugu" ? `అద్భుతం!\n\nదయచేసి మీ ప్రధాన పంటను పంపండి (ఉదా: Rice, Cotton):`
+        : lang === "hindi" ? `बहुत अच्छे!\n\nकृपया अपनी मुख्य फसल भेजें (जैसे: Rice, Cotton):`
+        : `Excellent!\n\nPlease send your main crop (e.g., Rice, Cotton):`;
+      await sendWhatsAppMessage(phoneNumber, askCrop);
+      return;
+    }
+    if (!farmerCrop) {
+      await db.update(farmers).set({ primaryCrop: message.trim() }).where(eq(farmers.id, farmerId));
+      const readyMsg = lang === "telugu" ? `అన్ని వివరాలు సేకరించబడ్డాయి!\n\nమీ AI సహాయకుడు సిద్ధంగా ఉన్నాడు.`
+        : lang === "hindi" ? `सभी जानकारी एकत्रित हो गई!\n\nआपका AI सहायक तैयार है।`
+        : `All details collected!\n\nYour AI assistant is ready.`;
+      await sendWhatsAppMessage(phoneNumber, readyMsg);
+      await sendMainMenu(phoneNumber, lang);
+      return;
+    }
+  }
+
   // 2. Find or create active conversation
   let conversation = await db.select().from(conversations)
     .where(sql`${conversations.farmerId} = ${farmerId} AND ${conversations.status} = 'active'`)
@@ -230,7 +288,7 @@ async function processIncomingMessage(phoneNumber: string, message: string, cont
 
     // Step 1: Generate response
     console.log(`[WhatsApp] Step 1: Generating AI response...`);
-    aiResponse = await generateAIResponse(intent, lang, farmerDistrict, farmerState, farmerPincode, farmerCrop);
+    aiResponse = await generateAIResponse(intent, lang, farmerDistrict, farmerState, farmerPincode, farmerCrop, farmerName);
     console.log(`[WhatsApp] Step 1 DONE: Response ${aiResponse.length} chars`);
 
     // Step 2: Save farmer message
@@ -290,8 +348,11 @@ async function processIncomingMessage(phoneNumber: string, message: string, cont
       await sendWhatsAppMessage(phoneNumber, aiResponse);
       await sendMainMenu(phoneNumber, lang);
     } else if (isNewFarmer) {
-      await sendWhatsAppMessage(phoneNumber, aiResponse);
-      await sendMainMenu(phoneNumber, lang);
+      // New farmer: personalized welcome, ask for name first
+      const welcomeMsg = lang === "telugu" ? `నమస్కారం! నేను మీ Kisan Saathi AI సహాయకుడిని.\n\nమీ పేరును చెప్పగలరా?`
+        : lang === "hindi" ? `नमस्ते! मैं आपका Kisan Saathi AI सहायक हूं।\n\nकृपया अपना नाम बताएं?`
+        : `Hello! I am your Kisan Saathi AI assistant.\n\nMay I know your name?`;
+      await sendWhatsAppMessage(phoneNumber, welcomeMsg);
     } else {
       await sendWhatsAppMessage(phoneNumber, aiResponse);
     }
@@ -1077,7 +1138,7 @@ async function sendCropSelectionList(phoneNumber: string, lang: string) {
     let cropArray: any[] = [];
     try {
       const [rows] = await pool.execute(
-        "SELECT crop_name, crop_name_telugu, crop_name_hindi, variety, is_active FROM crop_knowledge LIMIT 100"
+        "SELECT crop_name, crop_name_telugu, crop_name_hindi, is_active FROM crop_knowledge LIMIT 100"
       );
       cropArray = (rows as any[]) || [];
       console.log(`[CropSelection] Raw mysql2 returned ${cropArray.length} rows`);
@@ -1110,7 +1171,7 @@ async function sendCropSelectionList(phoneNumber: string, lang: string) {
       const name = lang === "telugu" && c.crop_name_telugu ? c.crop_name_telugu
         : lang === "hindi" && c.crop_name_hindi ? c.crop_name_hindi
         : c.crop_name;
-      return `${i + 1}. ${name}${c.variety ? ` (${c.variety})` : ""}`;
+      return `${i + 1}. ${name}`;
     }).join("\n");
 
     const header = lang === "telugu" ? `📋 *పంట జ్ఞానం*\n\nవివరాల కోసం పంట పేరును టైప్ చేయండి:`
@@ -1182,7 +1243,7 @@ async function getCropAdviceByName(cropName: string, lang: string): Promise<stri
       : lang === "hindi" && c.content_hindi ? c.content_hindi
       : c.content || "No detailed content available.";
 
-    let response = `💡 *${name}${c.variety ? ` (${c.variety})` : ""}*\n`;
+    let response = `💡 *${name}*\n`;
     response += `*${title}*\n\n`;
     response += `${content}\n\n`;
 
@@ -1248,7 +1309,7 @@ async function formatNewsFromDB(lang: string): Promise<string> {
   }
 }
 
-async function generateAIResponse(intent: string, lang: string, district?: string | null, state?: string | null, pincode?: string | null, farmerCrop?: string | null): Promise<string> {
+async function generateAIResponse(intent: string, lang: string, district?: string | null, state?: string | null, pincode?: string | null, farmerCrop?: string | null, farmerName?: string | null): Promise<string> {
   console.log(`[generateAIResponse] START: intent=${intent}, lang=${lang}, district=${district}, state=${state}, pincode=${pincode}, crop=${farmerCrop}`);
 
   // Normalize intent names from button IDs
@@ -1320,19 +1381,19 @@ Type "menu" to see options.`,
   // 6. Static responses for greeting, language_change, general
   const responses: Record<string, Record<string, string>> = {
     greeting: {
-      english: `👋 *Welcome to Kisan Saathi!*
+      english: `👋 *Welcome back${farmerName ? `, ${farmerName}` : ""}!*
 
-Your AI farming assistant is ready to help.
+Your Kisan Saathi is ready to help.
 
 Tap the menu below to get started 👇`,
-      hindi: `🙏 *किसान साथी में स्वागत है!*
+      hindi: `🙏 *नमस्ते${farmerName ? ` ${farmerName}` : ""}!*
 
-आपका AI कृषि सहायक मदद के लिए तैयार है।
+आपका किसान साथी मदद के लिए तैयार है।
 
 शुरू करने के लिए नीचे मेनू दबाएं 👇`,
-      telugu: `🙏 *కిసాన్ సాథికి స్వాగతం!*
+      telugu: `🙏 *నమస్కారం${farmerName ? ` ${farmerName}` : ""}!*
 
-మీ AI వ్యవసాయ సహాయకుడు సహాయానికి సిద్ధంగా ఉన్నాడు।
+మీ కిసాన్ సాథి సహాయానికి సిద్ధంగా ఉన్నాడు।
 
 ప్రారంభించడానికి కింది మెనూను ట్యాప్ చేయండి 👇`,
       kannada: `🙏 *ಕಿಸಾನ್ ಸಾಥಿಗೆ ಸ್ವಾಗತ!*
