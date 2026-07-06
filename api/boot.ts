@@ -1073,18 +1073,30 @@ async function sendCropSelectionList(phoneNumber: string, lang: string) {
   try {
     console.log(`[CropSelection] Fetching crops for lang=${lang}`);
 
-    const allCrops = await db.select({
-      cropName: cropKnowledge.cropName,
-      cropNameTelugu: cropKnowledge.cropNameTelugu,
-      cropNameHindi: cropKnowledge.cropNameHindi,
-      variety: cropKnowledge.variety,
-    })
-      .from(cropKnowledge)
-      .where(eq(cropKnowledge.isActive, true));
+    // Try without WHERE first to check if table exists
+    let allCrops: any[] = [];
+    try {
+      allCrops = await db.select({
+        cropName: cropKnowledge.cropName,
+        cropNameTelugu: cropKnowledge.cropNameTelugu,
+        cropNameHindi: cropKnowledge.cropNameHindi,
+        variety: cropKnowledge.variety,
+        isActive: cropKnowledge.isActive,
+      }).from(cropKnowledge);
+      console.log(`[CropSelection] Raw query returned ${allCrops?.length ?? 0} rows`);
+    } catch (tableErr: any) {
+      console.error(`[CropSelection] Table query failed:`, tableErr.message);
+      await sendWhatsAppMessage(phoneNumber, lang === "telugu" ? `📋 *పంట జ్ఞానం*\n\nపంటల డేటాబేస్ టేబుల్ లేదు.\n\nడాష్‌బోర్డ్‌లో పంటలను జోడించండి.`
+        : lang === "hindi" ? `📋 *फसल ज्ञान*\n\nफसल डेटाबेस टेबल नहीं मिला।\n\nडैशबोर्ड में फसलें जोड़ें।`
+        : `📋 *Crop Knowledge*\n\nCrop database table not found.\n\nAdd crops via the dashboard.\n\n(Error: ${tableErr.message})`);
+      return;
+    }
 
+    // Filter active crops in JS
+    const activeCrops = (allCrops || []).filter((c: any) => c && c.isActive !== false);
     const seen = new Set<string>();
-    const crops = allCrops.filter((c) => {
-      if (!c.cropName || seen.has(c.cropName)) return false;
+    const crops = activeCrops.filter((c: any) => {
+      if (!c || !c.cropName || seen.has(c.cropName)) return false;
       seen.add(c.cropName);
       return true;
     });
@@ -1101,8 +1113,8 @@ async function sendCropSelectionList(phoneNumber: string, lang: string) {
       return;
     }
 
-    // Build text message with crop list - RELIABLE, no interactive list
-    const cropNames = crops.map((c, i) => {
+    // Build text message with crop list
+    const cropNames = crops.map((c: any, i: number) => {
       const name = lang === "telugu" && c.cropNameTelugu ? c.cropNameTelugu
         : lang === "hindi" && c.cropNameHindi ? c.cropNameHindi
         : c.cropName;
@@ -1119,7 +1131,7 @@ async function sendCropSelectionList(phoneNumber: string, lang: string) {
 
     await sendWhatsAppMessage(phoneNumber, header + "\n\n" + cropNames + footer);
   } catch (e: any) {
-    console.error(`[CropSelection] CRITICAL ERROR:`, e.message);
+    console.error(`[CropSelection] CRITICAL ERROR:`, e.message, e.stack);
     await sendWhatsAppMessage(phoneNumber, lang === "telugu" ? `పంటల జాబితా లోపం: ${e.message}`
       : lang === "hindi" ? `फसल सूची त्रुटि: ${e.message}`
       : `Crop list error: ${e.message}`);
@@ -1133,29 +1145,25 @@ async function findCropByName(message: string): Promise<string | null> {
     const clean = message.trim().toLowerCase();
     if (clean.length < 2) return null;
 
-    // Try exact match on cropName
-    const exact = await db.select({ cropName: cropKnowledge.cropName })
-      .from(cropKnowledge)
-      .where(
-        and(
-          eq(cropKnowledge.isActive, true),
-          sql`LOWER(${cropKnowledge.cropName}) = ${clean}`
-        )
-      )
-      .limit(1);
-    if (exact.length > 0) return exact[0].cropName;
+    // Try exact match
+    let exact: any[] = [];
+    try {
+      exact = await db.select({ cropName: cropKnowledge.cropName })
+        .from(cropKnowledge)
+        .where(sql`LOWER(${cropKnowledge.cropName}) = ${clean}`)
+        .limit(1);
+    } catch { /* table may not exist */ }
+    if (exact && exact.length > 0) return exact[0].cropName;
 
-    // Try LIKE match (partial)
-    const partial = await db.select({ cropName: cropKnowledge.cropName })
-      .from(cropKnowledge)
-      .where(
-        and(
-          eq(cropKnowledge.isActive, true),
-          sql`LOWER(${cropKnowledge.cropName}) LIKE ${"%" + clean + "%"}`
-        )
-      )
-      .limit(1);
-    if (partial.length > 0) return partial[0].cropName;
+    // Try partial match
+    let partial: any[] = [];
+    try {
+      partial = await db.select({ cropName: cropKnowledge.cropName })
+        .from(cropKnowledge)
+        .where(sql`LOWER(${cropKnowledge.cropName}) LIKE ${"%" + clean + "%"}`)
+        .limit(1);
+    } catch { /* table may not exist */ }
+    if (partial && partial.length > 0) return partial[0].cropName;
 
     return null;
   } catch (e: any) {
@@ -1168,24 +1176,24 @@ async function findCropByName(message: string): Promise<string | null> {
 async function getCropAdviceByName(cropName: string, lang: string): Promise<string> {
   const db = getDb();
   try {
-    // Remove the "crop_" prefix and replace underscores with spaces
     const cleanName = cropName.replace(/^crop_/, "").replace(/_/g, " ");
 
-    const crops = await db.select()
-      .from(cropKnowledge)
-      .where(
-        and(
-          eq(cropKnowledge.isActive, true),
-          sql`LOWER(${cropKnowledge.cropName}) = LOWER(${cleanName})`
-        )
-      )
-      .limit(1);
+    let crops: any[] = [];
+    try {
+      crops = await db.select()
+        .from(cropKnowledge)
+        .where(sql`LOWER(${cropKnowledge.cropName}) = LOWER(${cleanName})`)
+        .limit(1);
+    } catch (tableErr: any) {
+      console.error(`[CropAdvice] Table error:`, tableErr.message);
+      return `💡 *Crop Advice*\n\nCrop knowledge database not found.\n\nPlease add crops via the dashboard.`;
+    }
 
-    if (crops.length === 0) {
+    if (!crops || crops.length === 0) {
       const notFound: Record<string, string> = {
-        english: `💡 *Crop Advice*\n\nSorry, no detailed advice found for "${cleanName}".\n\nType "menu" to see all available crops.`,
-        hindi: `💡 *फसल सलाह*\n\n"${cleanName}" के लिए कोई विस्तृत सलाह नहीं मिली।\n\nसभी उपलब्ध फसलें देखने के लिए "menu" टाइप करें।`,
-        telugu: `💡 *పంట సలహా*\n\n"${cleanName}" కు వివరణాత్మక సలహా లభించలేదు.\n\nఅన్ని పంటలను చూడటానికి "menu" టైప్ చేయండి.`,
+        english: `💡 *Crop Advice*\n\nNo advice found for "${cleanName}".\n\nType "menu" to see all crops.`,
+        hindi: `💡 *फसल सलाह*\n\n"${cleanName}" के लिए कोई सलाह नहीं।\n\nसभी फसलें देखने के लिए "menu" टाइप करें।`,
+        telugu: `💡 *పంట సలహా*\n\n"${cleanName}" కు సలహా లభించలేదు.\n\nఅన్ని పంటలను చూడటానికి "menu" టైప్ చేయండి.`,
       };
       return notFound[lang] ?? notFound.english;
     }
@@ -1194,12 +1202,10 @@ async function getCropAdviceByName(cropName: string, lang: string): Promise<stri
     const name = lang === "telugu" && c.cropNameTelugu ? c.cropNameTelugu
       : lang === "hindi" && c.cropNameHindi ? c.cropNameHindi
       : c.cropName;
-    const title = lang === "telugu" && c.titleTelugu ? c.titleTelugu
-      : lang === "hindi" && c.titleHindi ? c.titleHindi
-      : c.title;
+    const title = c.title || "Farming Advice";
     const content = lang === "telugu" && c.contentTelugu ? c.contentTelugu
       : lang === "hindi" && c.contentHindi ? c.contentHindi
-      : c.content;
+      : c.content || "No detailed content available.";
 
     let response = `💡 *${name}${c.variety ? ` (${c.variety})` : ""}*\n`;
     response += `*${title}*\n\n`;
@@ -1216,7 +1222,7 @@ async function getCropAdviceByName(cropName: string, lang: string): Promise<stri
     return response;
   } catch (e: any) {
     console.error("[CropAdvice] Error:", e.message);
-    return `💡 *Crop Advice*\n\nUnable to fetch advice. Please try again.`;
+    return `💡 *Crop Advice*\n\nError: ${e.message}`;
   }
 }
 
