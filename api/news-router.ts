@@ -15,6 +15,63 @@ interface RawNewsItem {
   publishedDate?: string;
 }
 
+// Translate text using MyMemory API (free tier, no key needed)
+async function translateText(text: string, targetLang: string): Promise<string | null> {
+  if (!text || text.length < 2) return null;
+  const langPair = targetLang === "te" ? "en|te"
+    : targetLang === "hi" ? "en|hi"
+    : targetLang === "kn" ? "en|kn"
+    : null;
+  if (!langPair) return null;
+
+  try {
+    const encoded = encodeURIComponent(text.substring(0, 500));
+    const res = await fetch(
+      `https://api.mymemory.translated.net/get?q=${encoded}&langpair=${langPair}`,
+      { signal: AbortSignal.timeout(8000) }
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    // MyMemory returns "TRANSLATION ERROR" or similar on failure
+    const translated = data?.responseData?.translatedText;
+    if (!translated || translated.startsWith("TRANSLATION") || translated === text) return null;
+    return translated;
+  } catch (e: any) {
+    console.error(`[Translate] ${langPair} failed:`, e.message);
+    return null;
+  }
+}
+
+// Batch translate a news item to all 3 languages
+async function translateNewsItem(item: RawNewsItem): Promise<{
+  titleTelugu?: string; titleHindi?: string; titleKannada?: string;
+  summaryTelugu?: string; summaryHindi?: string; summaryKannada?: string;
+}> {
+  const results: ReturnType<typeof translateNewsItem> extends Promise<infer T> ? T : never = {};
+
+  // Translate titles (run in parallel)
+  const [titleTe, titleHi, titleKn] = await Promise.all([
+    translateText(item.title, "te"),
+    translateText(item.title, "hi"),
+    translateText(item.title, "kn"),
+  ]);
+  if (titleTe) results.titleTelugu = titleTe;
+  if (titleHi) results.titleHindi = titleHi;
+  if (titleKn) results.titleKannada = titleKn;
+
+  // Translate summaries (run in parallel)
+  const [sumTe, sumHi, sumKn] = await Promise.all([
+    translateText(item.summary, "te"),
+    translateText(item.summary, "hi"),
+    translateText(item.summary, "kn"),
+  ]);
+  if (sumTe) results.summaryTelugu = sumTe;
+  if (sumHi) results.summaryHindi = sumHi;
+  if (sumKn) results.summaryKannada = sumKn;
+
+  return results;
+}
+
 // Parse RSS XML to extract items
 function parseRSS(xml: string, source: string): RawNewsItem[] {
   const items: RawNewsItem[] = [];
@@ -151,9 +208,18 @@ export const newsRouter = createRouter({
           continue;
         }
 
+        // Translate to regional languages
+        const translations = await translateNewsItem(item);
+
         await db.insert(dailyNews).values({
           title: item.title,
+          titleTelugu: translations.titleTelugu,
+          titleHindi: translations.titleHindi,
+          titleKannada: translations.titleKannada,
           summary: item.summary,
+          summaryTelugu: translations.summaryTelugu,
+          summaryHindi: translations.summaryHindi,
+          summaryKannada: translations.summaryKannada,
           source: item.source,
           sourceUrl: item.sourceUrl,
           category: item.category as any,

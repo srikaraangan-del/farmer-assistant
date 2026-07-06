@@ -15,6 +15,13 @@
       "when": 1783353727503,
       "tag": "0001_striped_gorgon",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1783355243950,
+      "tag": "0002_melted_hex",
+      "breakpoints": true
     }
   ]
 }

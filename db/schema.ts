@@ -362,9 +362,11 @@ export const dailyNews = mysqlTable(
     title: varchar("title", { length: 500 }).notNull(),
     titleTelugu: varchar("title_telugu", { length: 500 }),
     titleHindi: varchar("title_hindi", { length: 500 }),
+    titleKannada: varchar("title_kannada", { length: 500 }),
     summary: text("summary").notNull(),
     summaryTelugu: text("summary_telugu"),
     summaryHindi: text("summary_hindi"),
+    summaryKannada: text("summary_kannada"),
     source: varchar("source", { length: 255 }).notNull(), // e.g., "The Hindu", "Krishak Jagat"
     sourceUrl: varchar("source_url", { length: 1000 }),
     category: mysqlEnum("category", [

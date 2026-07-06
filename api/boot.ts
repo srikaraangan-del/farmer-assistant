@@ -152,8 +152,6 @@ async function processIncomingMessage(phoneNumber: string, message: string, cont
   if ((isGreeting && !profileComplete) || isAnsweringQuestion) {
     // Step 1: Collect name
     if (!farmerName) {
-      // If user sent a greeting ("hi"/"hello"), ask for name without saving
-      // If user sent a real name, save it and ask for state
       if (isGreeting) {
         const askName = lang === "telugu" ? `నమస్కారం! నేను మీ Krishiva AI సహాయకుడిని.\n\nమీ పేరును చెప్పగలరా?`
           : lang === "hindi" ? `नमस्ते! मैं आपका Krishiva AI सहायक हूं।\n\nकृपया अपना नाम बताएं?`
@@ -162,17 +160,58 @@ async function processIncomingMessage(phoneNumber: string, message: string, cont
         await sendWhatsAppMessage(phoneNumber, askName);
         return;
       }
-      // Real name provided - save it
+      // Real name provided - save it, ask for pincode next
       await db.update(farmers).set({ name: message.trim() }).where(eq(farmers.id, farmerId));
-      const askState = lang === "telugu" ? `నమస్కారం ${message.trim()}!\n\nదయచేసి మీ రాష్ట్రాన్ని పంపండి (ఉదా: Andhra Pradesh):`
-        : lang === "hindi" ? `नमस्ते ${message.trim()}!\n\nकृपया अपना राज्य भेजें (जैसे: Andhra Pradesh):`
-        : lang === "kannada" ? `ನಮಸ್ಕಾರ ${message.trim()}!\n\nದಯವಿಟ್ಟು ನಿಮ್ಮ ರಾಜ್ಯವನ್ನು ಕಳುಹಿಸಿ (ಉದಾ: Andhra Pradesh):`
-        : `Namaskaram ${message.trim()}!\n\nPlease send your state (e.g., Andhra Pradesh):`;
-      await sendWhatsAppMessage(phoneNumber, askState);
+      const askPincode = lang === "telugu" ? `నమస్కారం ${message.trim()}!\n\nదయచేసి మీ 6-అంకెల పిన్‌కోడ్‌ను పంపండి (ఉదా: 533201):\n\n📍 మేము మీ ఏరియా స్టేట్ మరియు జిల్లాను ఆటో-డిటెక్ట్ చేస్తాము.`
+        : lang === "hindi" ? `नमस्ते ${message.trim()}!\n\nकृपया अपना 6-अंकीय पिनकोड भेजें (जैसे: 533201):\n\n📍 हम आपका राज्य और जिला ऑटो-डिटेक्ट करेंगे।`
+        : lang === "kannada" ? `ನಮಸ್ಕಾರ ${message.trim()}!\n\nದಯವಿಟ್ಟು ನಿಮ್ಮ 6-ಅಂಕಿಯ ಪಿನ್‌ಕೋಡ್‌ನ್ನು ಕಳುಹಿಸಿ (ಉದಾ: 533201):\n\n📍 ನಾವು ನಿಮ್ಮ ರಾಜ್ಯ ಮತ್ತು ಜಿಲ್ಲೆಯನ್ನು ಆಟೋ-ಡಿಟೆಕ್ಟ್ ಮಾಡುತ್ತೇವೆ.`
+        : `Namaskaram ${message.trim()}!\n\nPlease send your 6-digit pincode (e.g., 533201):\n\n📍 We will auto-detect your state and district.`;
+      await sendWhatsAppMessage(phoneNumber, askPincode);
       return;
     }
 
-    // Step 2: Collect state
+    // Step 2: Collect pincode → auto-fetch state & district
+    if (!farmerPincode) {
+      if (/^\d{6}$/.test(message.trim())) {
+        const pin = message.trim();
+        // Fetch state and district from postal API
+        const location = await fetchLocationFromPincode(pin);
+        if (location) {
+          // Auto-detected - save all and ask for confirmation
+          await db.update(farmers).set({
+            pincode: pin,
+            state: location.state,
+            district: location.district,
+          }).where(eq(farmers.id, farmerId));
+          // Send confirmation with Yes/No buttons
+          const confirmBody = lang === "telugu" ? `📍 మేము మీ లొకేషన్ గుర్తించాము:\n*${location.district}, ${location.state}*\n\nఇది సరైనదా?`
+            : lang === "hindi" ? `📍 हमने आपका स्थान पहचाना:\n*${location.district}, ${location.state}*\n\nक्या यह सही है?`
+            : lang === "kannada" ? `📍 ನಾವು ನಿಮ್ಮ ಸ್ಥಳವನ್ನು ಗುರುತಿಸಿದ್ದೇವೆ:\n*${location.district}, ${location.state}*\n\nಇದು ಸರಿಯಾದದ್ದೇ?`
+            : `📍 We detected your location:\n*${location.district}, ${location.state}*\n\nIs this correct?`;
+          await sendWhatsAppButtons(phoneNumber, confirmBody, [
+            { id: "confirm_location_yes", title: lang === "telugu" ? "అవును ✅" : lang === "hindi" ? "हाँ ✅" : lang === "kannada" ? "ಹೌದು ✅" : "Yes ✅" },
+            { id: "confirm_location_no", title: lang === "telugu" ? "కాదు ❌" : lang === "hindi" ? "नहीं ❌" : lang === "kannada" ? "ಇಲ್ಲ ❌" : "No ❌" },
+          ]);
+        } else {
+          // API failed - save pincode only, ask for manual state
+          await db.update(farmers).set({ pincode: pin }).where(eq(farmers.id, farmerId));
+          const askState = lang === "telugu" ? `పిన్‌కోడ్ సేవ్ చేయబడింది.\n\nమేము మీ ఏరియాను గుర్తించలేకపోయాము.\n\nదయచేసి మీ రాష్ట్రాన్ని టైప్ చేయండి (ఉదా: Andhra Pradesh):`
+            : lang === "hindi" ? `पिनकोड सेव हो गया।\n\nहम आपका क्षेत्र नहीं पहचान सके।\n\nकृपया अपना राज्य टाइप करें (जैसे: Andhra Pradesh):`
+            : lang === "kannada" ? `ಪಿನ್‌ಕೋಡ್ ಉಳಿಸಲಾಗಿದೆ.\n\nನಾವು ನಿಮ್ಮ ಪ್ರದೇಶವನ್ನು ಗುರುತಿಸಲು ಸಾಧ್ಯವಾಗಲಿಲ್ಲ.\n\nದಯವಿಟ್ಟು ನಿಮ್ಮ ರಾಜ್ಯವನ್ನು ಟೈಪ್ ಮಾಡಿ (ಉದಾ: Karnataka):`
+            : `Pincode saved.\n\nWe could not detect your area.\n\nPlease type your state (e.g., Andhra Pradesh):`;
+          await sendWhatsAppMessage(phoneNumber, askState);
+        }
+      } else {
+        const retryPincode = lang === "telugu" ? `దయచేసి సరైన 6-అంకెల పిన్‌కోడ్‌ను పంపండి (ఉదా: 533201):`
+          : lang === "hindi" ? `कृपया वैध 6-अंकीय पिनकोड भेजें (जैसे: 533201):`
+          : lang === "kannada" ? `ದಯವಿಟ್ಟು ಸರಿಯಾದ 6-ಅಂಕಿಯ ಪಿನ್‌ಕೋಡ್‌ನ್ನು ಕಳುಹಿಸಿ (ಉದಾ: 533201):`
+          : `Please send a valid 6-digit pincode (e.g., 533201):`;
+        await sendWhatsAppMessage(phoneNumber, retryPincode);
+      }
+      return;
+    }
+
+    // Step 3: Manual state entry (only if auto-detect failed or user said "No")
     if (!farmerState) {
       await db.update(farmers).set({ state: message.trim() }).where(eq(farmers.id, farmerId));
       const askDistrict = lang === "telugu" ? `ధన్యవాదాలు!\n\nదయచేసి మీ జిల్లాను పంపండి (ఉదా: East Godavari):`
@@ -183,29 +222,10 @@ async function processIncomingMessage(phoneNumber: string, message: string, cont
       return;
     }
 
-    // Step 3: Collect district
+    // Step 4: Manual district entry
     if (!farmerDistrict) {
       await db.update(farmers).set({ district: message.trim() }).where(eq(farmers.id, farmerId));
-      const askPincode = lang === "telugu" ? `బాగుంది!\n\nదయచేసి మీ పిన్‌కోడ్‌ను పంపండి (ఉదా: 533201):`
-        : lang === "hindi" ? `बहुत बढ़िया!\n\nकृपया अपना पिनकोड भेजें (जैसे: 533201):`
-        : lang === "kannada" ? `ಅದ್ಭುತ!\n\nದಯವಿಟ್ಟು ನಿಮ್ಮ ಪಿನ್‌ಕೋಡ್‌ನ್ನು ಕಳುಹಿಸಿ (ಉದಾ: 533201):`
-        : `Great!\n\nPlease send your pincode (e.g., 533201):`;
-      await sendWhatsAppMessage(phoneNumber, askPincode);
-      return;
-    }
-
-    // Step 4: Collect pincode (must be 6 digits)
-    if (!farmerPincode) {
-      if (/^\d{6}$/.test(message.trim())) {
-        await db.update(farmers).set({ pincode: message.trim() }).where(eq(farmers.id, farmerId));
-        await sendLanguageMenu(phoneNumber);
-      } else {
-        const retryPincode = lang === "telugu" ? `దయచేసి సరైన 6-అంకెల పిన్‌కోడ్‌ను పంపండి (ఉదా: 533201):`
-          : lang === "hindi" ? `कृपया वैध 6-अंकीय पिनकोड भेजें (जैसे: 533201):`
-          : lang === "kannada" ? `ದಯವಿಟ್ಟು ಸರಿಯಾದ 6-ಅಂಕಿಯ ಪಿನ್‌ಕೋಡ್‌ನ್ನು ಕಳುಹಿಸಿ (ಉದಾ: 533201):`
-          : `Please send a valid 6-digit pincode (e.g., 533201):`;
-        await sendWhatsAppMessage(phoneNumber, retryPincode);
-      }
+      await sendLanguageMenu(phoneNumber);
       return;
     }
 
@@ -252,6 +272,29 @@ async function processIncomingMessage(phoneNumber: string, message: string, cont
       const cropAdvice = await getCropAdviceByName(intent, lang);
       await sendWhatsAppMessage(phoneNumber, cropAdvice);
       await sendMainMenu(phoneNumber, lang);
+      return;
+    }
+
+    // Handle location confirmation (Yes/No after pincode auto-detect)
+    if (intent === "confirm_location_yes") {
+      // Location confirmed - continue to language selection
+      const thankMsg = lang === "telugu" ? `ధన్యవాదాలు! మీ లొకేషన్ నమోదు చేయబడింది.`
+        : lang === "hindi" ? `धन्यवाद! आपका स्थान सेव कर लिया गया।`
+        : lang === "kannada" ? `ಧನ್ಯವಾದಗಳು! ನಿಮ್ಮ ಸ್ಥಳವನ್ನು ಉಳಿಸಲಾಗಿದೆ.`
+        : `Thank you! Your location has been saved.`;
+      await sendWhatsAppMessage(phoneNumber, thankMsg);
+      await sendLanguageMenu(phoneNumber);
+      return;
+    }
+
+    if (intent === "confirm_location_no") {
+      // Location rejected - clear state+district and ask for manual state
+      await db.update(farmers).set({ state: null, district: null }).where(eq(farmers.id, farmerId));
+      const askState = lang === "telugu" ? `సరే, దయచేసి మీ రాష్ట్రాన్ని టైప్ చేయండి (ఉదా: Andhra Pradesh):`
+        : lang === "hindi" ? `ठीक है, कृपया अपना राज्य टाइप करें (जैसे: Andhra Pradesh):`
+        : lang === "kannada" ? `ಸರಿ, ದಯವಿಟ್ಟು ನಿಮ್ಮ ರಾಜ್ಯವನ್ನು ಟೈಪ್ ಮಾಡಿ (ಉದಾ: Karnataka):`
+        : `Okay, please type your state (e.g., Andhra Pradesh):`;
+      await sendWhatsAppMessage(phoneNumber, askState);
       return;
     }
 
@@ -595,7 +638,7 @@ const MAIN_MENU: Record<string, { header: string; body: string; footer: string; 
         { id: "schemes", title: "Govt Schemes", description: "Find eligible government schemes" },
         { id: "crops", title: "Crop Knowledge", description: "Get farming advice for your crops" },
         { id: "news", title: "Daily News", description: "Read latest farming news and updates" },
-        { id: "language", title: "Change Language", description: "Switch to Telugu, Hindi or English" },
+        { id: "language", title: "Change Language", description: "Switch to Telugu, Hindi, Kannada or English" },
       ],
     }],
   },
@@ -612,7 +655,7 @@ const MAIN_MENU: Record<string, { header: string; body: string; footer: string; 
         { id: "schemes", title: "ప్రభుత్వ పథకాలు", description: "అర్హత గల ప్రభుత్వ పథకాలు కనుగొనండి" },
         { id: "crops", title: "పంట జ్ఞానం", description: "మీ పంటల కోసం వ్యవసాయ సలహా పొందండి" },
         { id: "news", title: "రోజువారీ వార్తలు", description: "తాజా వ్యవసాయ వార్తలు చదవండి" },
-        { id: "language", title: "భాష మార్చు", description: "తెలుగు, హిందీ లేదా ఆంగ్లంలోకి మార్చండి" },
+        { id: "language", title: "భాష మార్చు", description: "తెలుగు, హిందీ, కన్నడ లేదా ఆంగ్లంలోకి మార్చండి" },
       ],
     }],
   },
@@ -629,7 +672,7 @@ const MAIN_MENU: Record<string, { header: string; body: string; footer: string; 
         { id: "schemes", title: "सरकारी योजनाएं", description: "पात्र सरकारी योजनाएं खोजें" },
         { id: "crops", title: "फसल ज्ञान", description: "अपनी फसलों के लिए कृषि सलाह" },
         { id: "news", title: "दैनिक समाचार", description: "नवीनतम कृषि समाचार पढ़ें" },
-        { id: "language", title: "भाषा बदलें", description: "तेलुगु, हिंदी या अंग्रेजी में बदलें" },
+        { id: "language", title: "भाषा बदलें", description: "तेलुगु, हिंदी, कन्नड़ या अंग्रेजी में बदलें" },
       ],
     }],
   },
@@ -646,7 +689,7 @@ const MAIN_MENU: Record<string, { header: string; body: string; footer: string; 
         { id: "schemes", title: "ಸರ್ಕಾರಿ ಯೋಜನೆಗಳು", description: "ಅರ್ಹ ಸರ್ಕಾರಿ ಯೋಜನೆಗಳನ್ನು ಹುಡುಕಿ" },
         { id: "crops", title: "ಪಂಟ ಜ್ಞಾನ", description: "ನಿಮ್ಮ ಪಂಟಗಳಿಗೆ ಕೃಷಿ ಸಲಹೆ ಪಡೆಯಿರಿ" },
         { id: "news", title: "ದೈನಂದಿನ ಸುದ್ದಿ", description: "ತಾಜಾ ಕೃಷಿ ಸುದ್ದಿಗಳನ್ನು ಓದಿ" },
-        { id: "language", title: "ಭಾಷೆ ಬದಲಾಯಿಸಿ", description: "ತೆಲುಗು, ಹಿಂದಿ ಅಥವಾ ಇಂಗ್ಲಿಷ್‌ಗೆ ಬದಲಾಯಿಸಿ" },
+        { id: "language", title: "ಭಾಷೆ ಬದಲಾಯಿಸಿ", description: "ತೆಲುಗು, ಹಿಂದಿ, ಕನ್ನಡ ಅಥವಾ ಇಂಗ್ಲಿಷ್‌ಗೆ ಬದಲಾಯಿಸಿ" },
       ],
     }],
   },
@@ -707,6 +750,8 @@ function handleInteractiveReply(replyId: string, lang: string): { intent: string
     lang_telugu: "set_language_telugu",
     lang_hindi: "set_language_hindi",
     lang_kannada: "set_language_kannada",
+    confirm_location_yes: "confirm_location_yes",
+    confirm_location_no: "confirm_location_no",
   };
 
   // Check if this is a crop selection (e.g., "crop_rice", "crop_cotton")
@@ -716,6 +761,26 @@ function handleInteractiveReply(replyId: string, lang: string): { intent: string
   const isMenuAction = ["weather", "prices", "schemes", "crops", "news", "language"].includes(replyId);
 
   return { intent, isMenuAction, isCropSelection };
+}
+
+// Fetch state and district from Indian postal pincode API
+async function fetchLocationFromPincode(pincode: string): Promise<{ state: string; district: string } | null> {
+  try {
+    const res = await fetch(`https://api.postalpincode.in/pincode/${encodeURIComponent(pincode)}`, {
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (Array.isArray(data) && data[0]?.PostOffice?.length > 0) {
+      const po = data[0].PostOffice[0];
+      if (po.State && po.District) {
+        return { state: po.State, district: po.District };
+      }
+    }
+  } catch (e: any) {
+    console.error(`[Pincode] Location fetch error:`, e.message);
+  }
+  return null;
 }
 
 // Geocode a pincode using Open-Meteo
@@ -1400,9 +1465,11 @@ async function formatNewsFromDB(lang: string): Promise<string> {
     for (const item of items) {
       const title = lang === "telugu" && item.titleTelugu ? item.titleTelugu
         : lang === "hindi" && item.titleHindi ? item.titleHindi
+        : lang === "kannada" && item.titleKannada ? item.titleKannada
         : item.title;
       const summary = lang === "telugu" && item.summaryTelugu ? item.summaryTelugu
         : lang === "hindi" && item.summaryHindi ? item.summaryHindi
+        : lang === "kannada" && item.summaryKannada ? item.summaryKannada
         : item.summary;
       body += `• *${title}*\n  ${summary.substring(0, 120)}${summary.length > 120 ? "..." : ""}\n`;
       if (item.source) body += `  📰 ${item.source}`;
