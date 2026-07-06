@@ -140,27 +140,18 @@ async function processIncomingMessage(phoneNumber: string, message: string, cont
   const farmerDistrict = farmer[0]?.district;
   const farmerPincode = farmer[0]?.pincode;
   const farmerCrop = farmer[0]?.primaryCrop;
+  const profileComplete = farmerName && farmerState && farmerDistrict && farmerPincode && farmerCrop;
 
-  // Check if this message is providing missing profile info (not a menu command)
   const lowerMsg = message.toLowerCase().trim();
-  const isMenuCommand = ["menu", "hello", "hi", "hey", "start", "సేవలు", "మెనూ", "मेनू"].includes(lowerMsg);
-  const is6DigitPincode = /^\d{6}$/.test(message.trim());
+  const isGreeting = ["hello", "hi", "hey", "namaste", "start"].includes(lowerMsg);
 
-  if (!isMenuCommand && !interactiveId) {
-    // Farmer is typing a response to a profile question
+  // Only run onboarding on greeting for incomplete profiles, or when answering questions
+  const isAnsweringQuestion = !interactiveId && !profileComplete && !isGreeting &&
+    !["menu", "సేవలు", "మెనూ", "मेनू"].includes(lowerMsg);
 
-    // Check 6-digit pincode FIRST (before name) to avoid saving pincode as name
-    if (is6DigitPincode && !farmerPincode) {
-      await db.update(farmers).set({ pincode: message.trim() }).where(eq(farmers.id, farmerId));
-      const askCrop = lang === "telugu" ? `అద్భుతం!\n\nదయచేసి మీ ప్రధాన పంటను పంపండి (ఉదా: Rice, Cotton):`
-        : lang === "hindi" ? `बहुत अच्छे!\n\nकृपया अपनी मुख्य फसल भेजें (जैसे: Rice, Cotton):`
-        : `Excellent!\n\nPlease send your main crop (e.g., Rice, Cotton):`;
-      await sendWhatsAppMessage(phoneNumber, askCrop);
-      return;
-    }
-
+  if ((isGreeting && !profileComplete) || isAnsweringQuestion) {
+    // Step 1: Collect name
     if (!farmerName) {
-      // Save name and ask for state
       await db.update(farmers).set({ name: message.trim() }).where(eq(farmers.id, farmerId));
       const askState = lang === "telugu" ? `నమస్కారం ${message.trim()}!\n\nదయచేసి మీ రాష్ట్రాన్ని పంపండి (ఉదా: Andhra Pradesh):`
         : lang === "hindi" ? `नमस्ते ${message.trim()}!\n\nकृपया अपना राज्य भेजें (जैसे: Andhra Pradesh):`
@@ -168,6 +159,8 @@ async function processIncomingMessage(phoneNumber: string, message: string, cont
       await sendWhatsAppMessage(phoneNumber, askState);
       return;
     }
+
+    // Step 2: Collect state
     if (!farmerState) {
       await db.update(farmers).set({ state: message.trim() }).where(eq(farmers.id, farmerId));
       const askDistrict = lang === "telugu" ? `ధన్యవాదాలు!\n\nదయచేసి మీ జిల్లాను పంపండి (ఉదా: East Godavari):`
@@ -176,6 +169,8 @@ async function processIncomingMessage(phoneNumber: string, message: string, cont
       await sendWhatsAppMessage(phoneNumber, askDistrict);
       return;
     }
+
+    // Step 3: Collect district
     if (!farmerDistrict) {
       await db.update(farmers).set({ district: message.trim() }).where(eq(farmers.id, farmerId));
       const askPincode = lang === "telugu" ? `బాగుంది!\n\nదయచేసి మీ పిన్‌కోడ్‌ను పంపండి (ఉదా: 533201):`
@@ -184,16 +179,33 @@ async function processIncomingMessage(phoneNumber: string, message: string, cont
       await sendWhatsAppMessage(phoneNumber, askPincode);
       return;
     }
+
+    // Step 4: Collect pincode (must be 6 digits)
+    if (!farmerPincode) {
+      if (/^\d{6}$/.test(message.trim())) {
+        await db.update(farmers).set({ pincode: message.trim() }).where(eq(farmers.id, farmerId));
+        await sendLanguageMenu(phoneNumber);
+      } else {
+        const retryPincode = lang === "telugu" ? `దయచేసి సరైన 6-అంకెల పిన్‌కోడ్‌ను పంపండి (ఉదా: 533201):`
+          : lang === "hindi" ? `कृपया वैध 6-अंकीय पिनकोड भेजें (जैसे: 533201):`
+          : `Please send a valid 6-digit pincode (e.g., 533201):`;
+        await sendWhatsAppMessage(phoneNumber, retryPincode);
+      }
+      return;
+    }
+
+    // Step 5: Collect crop
     if (!farmerCrop) {
       await db.update(farmers).set({ primaryCrop: message.trim() }).where(eq(farmers.id, farmerId));
-      const readyMsg = lang === "telugu" ? `అన్ని వివరాలు సేకరించబడ్డాయి!\n\nమీ AI సహాయకుడు సిద్ధంగా ఉన్నాడు.`
-        : lang === "hindi" ? `सभी जानकारी एकत्रित हो गई!\n\nआपका AI सहायक तैयार है।`
-        : `All details collected!\n\nYour AI assistant is ready.`;
+      const readyMsg = lang === "telugu" ? `అన్ని వివరాలు సేకరించబడ్డాయి ${farmerName}!\n\nమీ AI సహాయకుడు సిద్ధంగా ఉన్నాడు.`
+        : lang === "hindi" ? `सभी जानकारी एकत्रित हो गई ${farmerName}!\n\nआपका AI सहायक तैयार है।`
+        : `All details collected ${farmerName}!\n\nYour AI assistant is ready.`;
       await sendWhatsAppMessage(phoneNumber, readyMsg);
       await sendMainMenu(phoneNumber, lang);
       return;
     }
   }
+
 
   // 2. Find or create active conversation
   let conversation = await db.select().from(conversations)
@@ -283,12 +295,14 @@ async function processIncomingMessage(phoneNumber: string, message: string, cont
   let aiResponse = "";
   try {
     const lang = farmer[0]?.preferredLanguage ?? "english";
+    const farmerName = farmer[0]?.name;
     const farmerDistrict = farmer[0]?.district;
     const farmerState = farmer[0]?.state;
     const farmerPincode = farmer[0]?.pincode;
     const farmerCrop = farmer[0]?.primaryCrop;
+    const profileComplete = farmerName && farmerState && farmerDistrict && farmerPincode && farmerCrop;
 
-    console.log(`[WhatsApp] === PROCESSING ${phoneNumber} === intent=${intent}, lang=${lang}, district=${farmerDistrict}, state=${farmerState}`);
+    console.log(`[WhatsApp] === PROCESSING ${phoneNumber} === intent=${intent}, lang=${lang}, profileComplete=${profileComplete}`);
 
     // Step 1: Generate response
     console.log(`[WhatsApp] Step 1: Generating AI response...`);
@@ -336,16 +350,22 @@ async function processIncomingMessage(phoneNumber: string, message: string, cont
       // Show crop selection text list
       await sendCropSelectionList(phoneNumber, lang);
     } else if (isMenuAction && intent === "weather") {
-      // Weather: use pincode if available, otherwise ask for it
+      // Weather: use pincode if available
       if (farmerPincode) {
         const weatherMsg = await getWeatherResponse(farmerDistrict ?? "", farmerState ?? "", lang, farmerPincode);
         await sendWhatsAppMessage(phoneNumber, weatherMsg);
         await sendMainMenu(phoneNumber, lang);
+      } else if (!profileComplete) {
+        // During onboarding - tell them to complete profile first
+        const completeProfile = lang === "telugu" ? `🌦️ *వాతావరణం*\n\nమీ ప్రొఫైల్‌ను పూర్తి చేయండి.\n\nమీ పిన్‌కోడ్ సేకరించబడుతుంది.\n\n_Type "menu" to continue_`
+          : lang === "hindi" ? `🌦️ *मौसम*\n\nकृपया अपनी प्रोफ़ाइल पूरी करें।\n\nआपका पिनकोड एकत्र किया जाएगा।\n\n_Type "menu" to continue_`
+          : `🌦️ *Weather*\n\nPlease complete your profile setup first.\n\nYour pincode will be collected during registration.\n\n_Type "menu" to continue_`;
+        await sendWhatsAppMessage(phoneNumber, completeProfile);
       } else {
-        // Ask farmer to enter pincode
-        const askPincode = lang === "telugu" ? `🌦️ *వాతావరణం*\n\nమీ ఏరియా పిన్‌కోడ్‌ను పంపండి (ఉదా: 500001).\n\nపిన్‌కోడ్ ఆధారంగా వాతావరణ సమాచారం అందిస్తాము.`
-          : lang === "hindi" ? `🌦️ *मौसम*\n\nकृपया अपना एरिया पिनकोड भेजें (जैसे: 500001)。\n\nहम पिनकोड के आधार पर मौसम की जानकारी देंगे।`
-          : `🌦️ *Weather*\n\nPlease send your area pincode (e.g., 500001).\n\nWe'll provide weather based on your pincode.`;
+        // Profile complete but no pincode - ask for it
+        const askPincode = lang === "telugu" ? `🌦️ *వాతావరణం*\n\nమీ ఏరియా పిన్‌కోడ్‌ను పంపండి (ఉదా: 500001).`
+          : lang === "hindi" ? `🌦️ *मौसम*\n\nकृपया अपना एरिया पिनकोड भेजें (जैसे: 500001)。`
+          : `🌦️ *Weather*\n\nPlease send your area pincode (e.g., 500001).`;
         await sendWhatsAppMessage(phoneNumber, askPincode);
       }
     } else if (isMenuAction) {
@@ -1170,23 +1190,27 @@ async function sendCropSelectionList(phoneNumber: string, lang: string) {
       return;
     }
 
-    // Build text message
-    const cropNames = crops.map((c: any, i: number) => {
+    // Use reply buttons for crop selection (like language buttons)
+    const cropButtons = crops.slice(0, 9).map((c: any) => {
       const name = lang === "telugu" && c.crop_name_telugu ? c.crop_name_telugu
         : lang === "hindi" && c.crop_name_hindi ? c.crop_name_hindi
         : c.crop_name;
-      return `${i + 1}. ${name}`;
-    }).join("\n");
+      return {
+        id: `crop_${c.crop_name.toLowerCase().replace(/\s+/g, "_")}`,
+        title: name.slice(0, 20),
+      };
+    });
 
-    const header = lang === "telugu" ? `📋 *పంట జ్ఞానం*\n\nవివరాల కోసం పంట పేరును టైప్ చేయండి:`
-      : lang === "hindi" ? `📋 *फसल ज्ञान*\n\nविवरण के लिए फसल का नाम टाइप करें:`
-      : `📋 *Crop Knowledge*\n\nType a crop name for detailed advice:`;
+    const body = lang === "telugu" ? `పంటను ఎంచుకోండి:`
+      : lang === "hindi" ? `फसल चुनें:`
+      : `Select a crop for detailed advice:`;
 
-    const footer = lang === "telugu" ? `\n\n_పైన ఉన్న ఏదైనా పంట పేరును టైప్ చేయండి_`
-      : lang === "hindi" ? `\n\n_ऊपर किसी भी फसल का नाम टाइप करें_`
-      : `\n\n_Type any crop name from above_`;
-
-    await sendWhatsAppMessage(phoneNumber, header + "\n\n" + cropNames + footer);
+    const success = await sendWhatsAppButtons(phoneNumber, body, cropButtons);
+    if (!success) {
+      // Fallback to text if buttons fail
+      const cropNames = crops.map((c: any, i: number) => `${i + 1}. ${c.crop_name}`).join("\n");
+      await sendWhatsAppMessage(phoneNumber, `📋 *Crop Knowledge*\n\nType a crop name:\n\n${cropNames}`);
+    }
   } catch (e: any) {
     console.error(`[CropSelection] CRITICAL ERROR:`, e.message, e.stack);
     await sendWhatsAppMessage(phoneNumber, `Crop list error: ${e.message}`);
