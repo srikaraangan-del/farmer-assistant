@@ -138,7 +138,7 @@ export const messages = mysqlTable(
       .notNull(),
     content: text("content"), // text content or transcription
     mediaUrl: text("media_url"), // for voice/image
-    language: mysqlEnum("language", ["telugu", "hindi", "english"]).default("english"),
+    language: mysqlEnum("language", ["telugu", "hindi", "kannada", "english"]).default("english"),
     aiResponse: text("ai_response"), // AI generated response
     intentDetected: varchar("intent_detected", { length: 100 }),
     processingTime: int("processing_time_ms"), // AI processing time
@@ -501,7 +501,7 @@ export const dailyBriefings = mysqlTable(
     status: mysqlEnum("status", ["pending", "sent", "failed", "skipped"])
       .default("pending")
       .notNull(),
-    language: mysqlEnum("language", ["telugu", "hindi", "english"])
+    language: mysqlEnum("language", ["telugu", "hindi", "kannada", "english"])
       .default("english")
       .notNull(),
     weatherIncluded: boolean("weather_included").default(true).notNull(),
