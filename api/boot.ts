@@ -155,9 +155,9 @@ async function processIncomingMessage(phoneNumber: string, message: string, cont
       // If user sent a greeting ("hi"/"hello"), ask for name without saving
       // If user sent a real name, save it and ask for state
       if (isGreeting) {
-        const askName = lang === "telugu" ? `నమస్కారం! నేను మీ Kisan Saathi AI సహాయకుడిని.\n\nమీ పేరును చెప్పగలరా?`
-          : lang === "hindi" ? `नमस्ते! मैं आपका Kisan Saathi AI सहायक हूं।\n\nकृपया अपना नाम बताएं?`
-          : `Hello! I am your Kisan Saathi AI assistant.\n\nMay I know your name?`;
+        const askName = lang === "telugu" ? `నమస్కారం! నేను మీ Krishiva AI సహాయకుడిని.\n\nమీ పేరును చెప్పగలరా?`
+          : lang === "hindi" ? `नमस्ते! मैं आपका Krishiva AI सहायक हूं।\n\nकृपया अपना नाम बताएं?`
+          : `Hello! I am your Krishiva AI assistant.\n\nMay I know your name?`;
         await sendWhatsAppMessage(phoneNumber, askName);
         return;
       }
@@ -391,9 +391,9 @@ async function processIncomingMessage(phoneNumber: string, message: string, cont
       await sendMainMenu(phoneNumber, lang);
     } else if (isNewFarmer) {
       // New farmer: personalized welcome, ask for name first
-      const welcomeMsg = lang === "telugu" ? `నమస్కారం! నేను మీ Kisan Saathi AI సహాయకుడిని.\n\nమీ పేరును చెప్పగలరా?`
-        : lang === "hindi" ? `नमस्ते! मैं आपका Kisan Saathi AI सहायक हूं।\n\nकृपया अपना नाम बताएं?`
-        : `Hello! I am your Kisan Saathi AI assistant.\n\nMay I know your name?`;
+      const welcomeMsg = lang === "telugu" ? `నమస్కారం! నేను మీ Krishiva AI సహాయకుడిని.\n\nమీ పేరును చెప్పగలరా?`
+        : lang === "hindi" ? `नमस्ते! मैं आपका Krishiva AI सहायक हूं।\n\nकृपया अपना नाम बताएं?`
+        : `Hello! I am your Krishiva AI assistant.\n\nMay I know your name?`;
       await sendWhatsAppMessage(phoneNumber, welcomeMsg);
     } else {
       await sendWhatsAppMessage(phoneNumber, aiResponse);
@@ -570,7 +570,7 @@ async function sendWhatsAppButtons(toPhoneNumber: string, body: string, buttons:
 // Language-specific main menu
 const MAIN_MENU: Record<string, { header: string; body: string; footer: string; button: string; sections: ListSection[] }> = {
   english: {
-    header: "Kisan Saathi",
+    header: "Krishiva",
     body: "Your AI farming assistant. Select a service:",
     footer: "Tap the button below to see options",
     button: "Services",
@@ -1208,24 +1208,31 @@ async function sendCropSelectionList(phoneNumber: string, lang: string) {
       return;
     }
 
-    // Use reply buttons for crop selection (like language buttons)
-    const cropButtons = crops.slice(0, 9).map((c: any) => {
+    // Use list message for crop selection (supports up to 10 items)
+    const cropRows = crops.slice(0, 10).map((c: any) => {
       const name = lang === "telugu" && c.crop_name_telugu ? c.crop_name_telugu
         : lang === "hindi" && c.crop_name_hindi ? c.crop_name_hindi
         : c.crop_name;
       return {
         id: `crop_${c.crop_name.toLowerCase().replace(/\s+/g, "_")}`,
-        title: name.slice(0, 20),
+        title: name.slice(0, 24),
+        description: lang === "telugu" ? `${name} పంట సలహా` : lang === "hindi" ? `${name} की सलाह` : `${name} farming advice`,
       };
     });
 
-    const body = lang === "telugu" ? `పంటను ఎంచుకోండి:`
-      : lang === "hindi" ? `फसल चुनें:`
+    const listHeader = lang === "telugu" ? `పంట జ్ఞానం` : lang === "hindi" ? `फसल ज्ञान` : `Crop Knowledge`;
+    const listBody = lang === "telugu" ? `వివరణాత్మక సలహా కోసం పంటను ఎంచుకోండి:`
+      : lang === "hindi" ? `विस्तृत सलाह के लिए फसल चुनें:`
       : `Select a crop for detailed advice:`;
+    const listButton = lang === "telugu" ? `పంటలు చూడండి` : lang === "hindi" ? `फसलें देखें` : `View Crops`;
 
-    const success = await sendWhatsAppButtons(phoneNumber, body, cropButtons);
+    const success = await sendWhatsAppList(phoneNumber, listHeader, listBody, "", listButton, [{
+      title: lang === "telugu" ? `పంటల జాబితా` : lang === "hindi" ? `फसल सूची` : `Crop List`,
+      rows: cropRows,
+    }]);
+
     if (!success) {
-      // Fallback to text if buttons fail
+      // Fallback to text if list fails
       const cropNames = crops.map((c: any, i: number) => `${i + 1}. ${c.crop_name}`).join("\n");
       await sendWhatsAppMessage(phoneNumber, `📋 *Crop Knowledge*\n\nType a crop name:\n\n${cropNames}`);
     }
@@ -1429,7 +1436,7 @@ Type "menu" to see options.`,
     greeting: {
       english: `👋 *Welcome back${farmerName ? `, ${farmerName}` : ""}!*
 
-Your Kisan Saathi is ready to help.
+Your Krishiva is ready to help.
 
 Tap the menu below to get started 👇`,
       hindi: `🙏 *नमस्ते${farmerName ? ` ${farmerName}` : ""}!*
@@ -1463,7 +1470,7 @@ Choose your preferred language using the buttons above.`,
 ಮೇಲಿನ ಬಟನ್ ಬಳಸಿ ನಿಮ್ಮ ಆದ್ಯತೆಯ ಭಾಷೆಯನ್ನು ಆಯ್ಕೆಮಾಡಿ।`,
     },
     general: {
-      english: `🤖 *Kisan Saathi*
+      english: `🤖 *Krishiva*
 
 I can help you with:
 • 🌦️ Weather updates
