@@ -1035,18 +1035,25 @@ async function sendCropSelectionList(phoneNumber: string, lang: string) {
   try {
     console.log(`[CropSelection] Fetching crops for lang=${lang}`);
 
-    // Use DISTINCT in subquery to avoid GROUP BY issues
-    const crops = await db.select({
+    // Fetch all active crops, deduplicate in JS (avoids GROUP BY issues)
+    const allCrops = await db.select({
       cropName: cropKnowledge.cropName,
-      cropNameTelugu: sql<string>`MAX(${cropKnowledge.cropNameTelugu})`,
-      cropNameHindi: sql<string>`MAX(${cropKnowledge.cropNameHindi})`,
-      variety: sql<string>`MAX(${cropKnowledge.variety})`,
+      cropNameTelugu: cropKnowledge.cropNameTelugu,
+      cropNameHindi: cropKnowledge.cropNameHindi,
+      variety: cropKnowledge.variety,
     })
       .from(cropKnowledge)
-      .where(eq(cropKnowledge.isActive, true))
-      .groupBy(cropKnowledge.cropName);
+      .where(eq(cropKnowledge.isActive, true));
 
-    console.log(`[CropSelection] Found ${crops.length} crops`);
+    // Deduplicate by cropName, keep first occurrence
+    const seen = new Set<string>();
+    const crops = allCrops.filter((c) => {
+      if (seen.has(c.cropName)) return false;
+      seen.add(c.cropName);
+      return true;
+    });
+
+    console.log(`[CropSelection] Found ${crops.length} unique crops from ${allCrops.length} rows`);
 
     const headers: Record<string, { header: string; body: string; footer: string; button: string }> = {
       english: { header: "Crop Knowledge", body: "Select a crop to get detailed farming advice:", footer: "Tap the button below to see crops", button: "Select Crop" },
