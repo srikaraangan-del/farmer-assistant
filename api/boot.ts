@@ -152,6 +152,16 @@ async function processIncomingMessage(phoneNumber: string, message: string, cont
   if ((isGreeting && !profileComplete) || isAnsweringQuestion) {
     // Step 1: Collect name
     if (!farmerName) {
+      // If user sent a greeting ("hi"/"hello"), ask for name without saving
+      // If user sent a real name, save it and ask for state
+      if (isGreeting) {
+        const askName = lang === "telugu" ? `నమస్కారం! నేను మీ Kisan Saathi AI సహాయకుడిని.\n\nమీ పేరును చెప్పగలరా?`
+          : lang === "hindi" ? `नमस्ते! मैं आपका Kisan Saathi AI सहायक हूं।\n\nकृपया अपना नाम बताएं?`
+          : `Hello! I am your Kisan Saathi AI assistant.\n\nMay I know your name?`;
+        await sendWhatsAppMessage(phoneNumber, askName);
+        return;
+      }
+      // Real name provided - save it
       await db.update(farmers).set({ name: message.trim() }).where(eq(farmers.id, farmerId));
       const askState = lang === "telugu" ? `నమస్కారం ${message.trim()}!\n\nదయచేసి మీ రాష్ట్రాన్ని పంపండి (ఉదా: Andhra Pradesh):`
         : lang === "hindi" ? `नमस्ते ${message.trim()}!\n\nकृपया अपना राज्य भेजें (जैसे: Andhra Pradesh):`
@@ -250,8 +260,16 @@ async function processIncomingMessage(phoneNumber: string, message: string, cont
         : "Language changed to English.";
       await sendWhatsAppMessage(phoneNumber, confirmText);
 
-      // Send main menu in new language
-      await sendMainMenu(phoneNumber, newLang);
+      // Check if crop is still missing → ask for crop before showing menu
+      const farmerCrop = farmer[0]?.primaryCrop;
+      if (!farmerCrop) {
+        const askCrop = newLang === "telugu" ? `అద్భుతం!\n\nదయచేసి మీ ప్రధాన పంటను పంపండి (ఉదా: Rice, Cotton):`
+          : newLang === "hindi" ? `बहुत अच्छे!\n\nकृपया अपनी मुख्य फसल भेजें (जैसे: Rice, Cotton):`
+          : `Excellent!\n\nPlease send your main crop (e.g., Rice, Cotton):`;
+        await sendWhatsAppMessage(phoneNumber, askCrop);
+      } else {
+        await sendMainMenu(phoneNumber, newLang);
+      }
       return;
     }
   } else {
