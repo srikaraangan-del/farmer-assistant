@@ -1649,60 +1649,85 @@ async function buildNewsResponseAsync(items: any[], lang: string, headers: Recor
   let matchedCount = 0;
 
   for (const item of sorted.slice(0, 5)) {
-    const rawTitle = item.title || "";
-    const rawSummary = item.summary || "";
-    const isFromMatchingSource = item.source_language === langKey;
+    // Get all available versions of this article
+    const baseTitle: string = item.title || "";
+    const baseSummary: string = item.summary || "";
+    const teTitle: string = item.title_telugu || item.titleTelugu || "";
+    const hiTitle: string = item.title_hindi || item.titleHindi || "";
+    const knTitle: string = item.title_kannada || item.titleKannada || "";
+    const teSummary: string = item.summary_telugu || item.summaryTelugu || "";
+    const hiSummary: string = item.summary_hindi || item.summaryHindi || "";
+    const knSummary: string = item.summary_kannada || item.summaryKannada || "";
+    const articleSourceLang: string = item.source_language || item.sourceLanguage || "";
 
-    // 1. Check DB translation for farmer's language
-    let title: string | null = langKey === "telugu" ? (item.title_telugu || item.titleTelugu || null)
-      : langKey === "hindi" ? (item.title_hindi || item.titleHindi || null)
-      : langKey === "kannada" ? (item.title_kannada || item.titleKannada || null)
-      : (item.title || null);
+    let title: string | null = null;
+    let summary: string | null = null;
 
-    let summary: string | null = langKey === "telugu" ? (item.summary_telugu || item.summaryTelugu || null)
-      : langKey === "hindi" ? (item.summary_hindi || item.summaryHindi || null)
-      : langKey === "kannada" ? (item.summary_kannada || item.summaryKannada || null)
-      : (item.summary || null);
+    // 1. Use DB translation for farmer's language (highest priority)
+    if (langKey === "telugu" && teTitle) { title = teTitle; summary = teSummary; }
+    else if (langKey === "hindi" && hiTitle) { title = hiTitle; summary = hiSummary; }
+    else if (langKey === "kannada" && knTitle) { title = knTitle; summary = knSummary; }
+    else if (langKey === "english") { title = baseTitle; summary = baseSummary; }
 
-    // 2. If from matching source, original text is in farmer's language
-    if (isFromMatchingSource && !title) {
-      // Original RSS text IS in farmer's language
-      title = rawTitle; // rawTitle was stored as the original language text
-      summary = rawSummary;
+    // 2. If source language matches farmer's language, use original text
+    if (!title && articleSourceLang === langKey) {
+      title = baseTitle;
+      summary = baseSummary;
     }
 
-    // 3. On-the-fly translation if still missing
+    // 3. If article source is Hindi and farmer wants Kannada/Telugu,
+    //    try the Hindi→English→Target two-step translation
     if (!title && langKey !== "english") {
-      let translated = await translateText(rawTitle, langKey);
-      if (!translated) {
-        const englishVersion = await translateText(rawTitle, "english");
-        if (englishVersion) translated = await translateText(englishVersion, langKey);
-      }
-      if (translated) {
-        title = translated;
-        const dbField = langKey === "telugu" ? "title_telugu" : langKey === "hindi" ? "title_hindi" : "title_kannada";
-        if (item.id) await cacheTranslation(item.id, dbField, translated);
-      }
-    }
-
-    if (!summary && langKey !== "english") {
-      let translated = await translateText(rawSummary, langKey);
-      if (!translated) {
-        const englishVersion = await translateText(rawSummary, "english");
-        if (englishVersion) translated = await translateText(englishVersion, langKey);
-      }
-      if (translated) {
-        summary = translated;
-        const dbField = langKey === "telugu" ? "summary_telugu" : langKey === "hindi" ? "summary_hindi" : "summary_kannada";
-        if (item.id) await cacheTranslation(item.id, dbField, translated);
+      // Use baseTitle (should be English) for translation source
+      const sourceForTranslation = baseTitle || "";
+      if (sourceForTranslation) {
+        let translated = await translateText(sourceForTranslation, langKey);
+        if (translated) {
+          title = translated;
+          // Save to DB for next time
+          const dbField = langKey === "telugu" ? "title_telugu" : langKey === "hindi" ? "title_hindi" : "title_kannada";
+          if (item.id) await cacheTranslation(item.id, dbField, translated);
+        }
+        if (baseSummary) {
+          const sumTranslated = await translateText(baseSummary, langKey);
+          if (sumTranslated) {
+            summary = sumTranslated;
+            const dbField = langKey === "telugu" ? "summary_telugu" : langKey === "hindi" ? "summary_hindi" : "summary_kannada";
+            if (item.id) await cacheTranslation(item.id, dbField, sumTranslated);
+          }
+        }
       }
     }
 
-    // 4. Final fallback
-    if (!title) title = rawTitle || "News";
-    if (!summary) summary = rawSummary || "";
+    // 4. Final fallback — NEVER show Hindi to Kannada farmer or vice versa
+    if (!title) {
+      // Check what script baseTitle is in
+      const baseLang = detectTextLanguage(baseTitle);
+      if (langKey !== "english" && baseLang !== "english" && baseLang !== langKey) {
+        // baseTitle is in wrong language — try to get English from source translations
+        if (articleSourceLang === "hindi" && hiTitle) {
+          // Translate Hindi title to farmer's language
+          const viaEnglish = await translateText(hiTitle, "english");
+          if (viaEnglish) {
+            const toTarget = await translateText(viaEnglish, langKey);
+            if (toTarget) title = toTarget;
+          }
+        }
+        if (!title) title = "News Article"; // absolute last resort
+      } else {
+        title = baseTitle || "News Article";
+      }
+    }
+    if (!summary) {
+      const baseLang = detectTextLanguage(baseSummary);
+      if (langKey !== "english" && baseLang !== "english" && baseLang !== langKey) {
+        summary = baseSummary || "";
+      } else {
+        summary = baseSummary || "";
+      }
+    }
 
-    if (isFromMatchingSource) matchedCount++;
+    if (articleSourceLang === langKey) matchedCount++;
     const sourceTag = item.source ? `📰 ${item.source}` : "";
 
     body += `• *${title}*\n  ${summary.substring(0, 120)}${summary.length > 120 ? "..." : ""}\n  ${sourceTag}`;
@@ -1721,19 +1746,11 @@ async function buildNewsResponseAsync(items: any[], lang: string, headers: Recor
   return (headers[langKey] ?? headers.english) + body;
 }
 
-// Language-specific RSS sources for agriculture news
+// Working RSS sources for agriculture news
+// Each source is tagged with its native language so we know which translation column to use
 const NEWS_SOURCES = [
-  // English sources
-  { url: "https://www.thehindu.com/agriculture/feeder/default.rss", name: "The Hindu", sourceLang: "english" },
-  { url: "https://www.agriculture.com/rss/news", name: "Agriculture.com", sourceLang: "english" },
-  // Hindi sources
   { url: "https://krishakjagat.org/feed/", name: "Krishak Jagat", sourceLang: "hindi" },
-  // Telugu sources
-  { url: "https://www.eenadu.net/telugu-news/agriculture/rss", name: "Eenadu Agriculture", sourceLang: "telugu" },
-  { url: "https://www.sakshi.com/rss/agriculture", name: "Sakshi Agriculture", sourceLang: "telugu" },
-  // Kannada sources
-  { url: "https://www.prajavani.net/rss/agriculture", name: "Prajavani Agriculture", sourceLang: "kannada" },
-  { url: "https://vijaykarnataka.com/rss/agriculture", name: "Vijay Karnataka", sourceLang: "kannada" },
+  { url: "https://www.farmprogress.com/rss.xml", name: "Farm Progress", sourceLang: "english" },
 ];
 
 // Fetch live news from RSS sources — each tagged with its source language
@@ -1866,7 +1883,7 @@ async function saveNewsToDB(items: any[]): Promise<void> {
         summaryKannada: item.summary_kannada || item.summaryKannada,
         source: item.source, sourceUrl: item.source_url || item.sourceUrl,
         category: "general", fetchedAt: new Date(),
-        state: item.source_language,
+        sourceLanguage: item.source_language,
       });
     } catch (e: any) { /* ignore duplicates */ }
   }

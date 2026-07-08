@@ -29,6 +29,13 @@
       "when": 1783519569083,
       "tag": "0003_sleepy_zaladane",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "5",
+      "when": 1783529634034,
+      "tag": "0004_rapid_kree",
+      "breakpoints": true
     }
   ]
 }

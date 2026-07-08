@@ -385,6 +385,7 @@ export const dailyNews = mysqlTable(
       .default("general")
       .notNull(),
     state: varchar("state", { length: 100 }), // state-specific news if applicable
+    sourceLanguage: varchar("source_language", { length: 20 }), // language of source: english/hindi/telugu/kannada
     publishedDate: date("published_date"),
     fetchedAt: timestamp("fetched_at").defaultNow().notNull(),
     isActive: boolean("is_active").default(true).notNull(),
