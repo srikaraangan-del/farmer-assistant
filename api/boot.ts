@@ -918,13 +918,14 @@ async function fetchWeather(district: string, state: string, pincode?: string | 
     }
     console.log(`[Weather] Geocoded ${district} → ${geo.name} (${geo.lat}, ${geo.lon})`);
 
-    // precipitation_probability is NOT in current - use daily for rain chance
-    const url = `https://api.open-meteo.com/v1/forecast?latitude=${geo.lat}&longitude=${geo.lon}&current=temperature_2m,relative_humidity_2m,weather_code,is_day&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=auto&forecast_days=3`;
+    // Use reliable Open-Meteo parameters (precipitation_probability_max is not always available)
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${geo.lat}&longitude=${geo.lon}&current=temperature_2m,relative_humidity_2m,weather_code,is_day,precipitation&daily=temperature_2m_max,temperature_2m_min,precipitation_sum&timezone=auto&forecast_days=3`;
     console.log(`[Weather] API URL: ${url}`);
 
-    const res = await fetch(url);
+    const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
     if (!res.ok) {
-      console.error(`[Weather] API error: ${res.status}`);
+      const errorText = await res.text().catch(() => "");
+      console.error(`[Weather] API error ${res.status}: ${errorText.substring(0, 200)}`);
       return null;
     }
 
@@ -944,15 +945,27 @@ async function fetchWeather(district: string, state: string, pincode?: string | 
       0: "Clear sky", 1: "Mainly clear", 2: "Partly cloudy", 3: "Overcast",
       45: "Foggy", 48: "Rime fog",
       51: "Light drizzle", 53: "Moderate drizzle", 55: "Heavy drizzle",
+      56: "Freezing drizzle", 57: "Heavy freezing drizzle",
       61: "Light rain", 63: "Moderate rain", 65: "Heavy rain",
+      66: "Freezing rain", 67: "Heavy freezing rain",
       71: "Light snow", 73: "Moderate snow", 75: "Heavy snow",
-      80: "Rain showers", 81: "Moderate showers", 82: "Heavy showers",
-      95: "Thunderstorm", 96: "Thunderstorm with hail",
+      77: "Snow grains",
+      80: "Light showers", 81: "Moderate showers", 82: "Heavy showers",
+      85: "Snow showers", 86: "Heavy snow showers",
+      95: "Thunderstorm", 96: "Thunderstorm with hail", 99: "Thunderstorm with heavy hail",
     };
 
     const condition = wmoCodes[current.weather_code] ?? "Unknown";
-    // Use daily precipitation_probability_max for today
-    const rainProb = daily?.precipitation_probability_max?.[0] ?? 0;
+    // Derive rain probability from weather code + precipitation
+    const precip = daily?.precipitation_sum?.[0] ?? 0;
+    const code = current.weather_code ?? 0;
+    let rainProb = 0;
+    if (precip > 10) rainProb = 90;
+    else if (precip > 5) rainProb = 70;
+    else if (precip > 1) rainProb = 50;
+    else if (precip > 0) rainProb = 30;
+    else if ([51,53,55,56,57,61,63,65,66,67,80,81,82,95,96,99].includes(code)) rainProb = 60;
+    else if ([71,73,75,77,85,86].includes(code)) rainProb = 50;
 
     console.log(`[Weather] Result: ${Math.round(current.temperature_2m)}°C, ${condition}, Humidity: ${current.relative_humidity_2m}%, Rain: ${rainProb}%`);
 
@@ -961,7 +974,7 @@ async function fetchWeather(district: string, state: string, pincode?: string | 
       humidity: current.relative_humidity_2m,
       rainProb,
       condition,
-      forecast: `High: ${Math.round(daily.temperature_2m_max[0])}°C, Low: ${Math.round(daily.temperature_2m_min[0])}°C`,
+      forecast: `High: ${Math.round(daily?.temperature_2m_max?.[0] ?? 0)}°C, Low: ${Math.round(daily?.temperature_2m_min?.[0] ?? 0)}°C`,
       location: geo?.name ?? district,
     };
   } catch (e: any) {
@@ -1164,29 +1177,25 @@ async function formatMarketPrices(lang: string, district?: string | null, state?
 
 // Fetch government schemes from DB
 async function formatSchemesFromDB(lang: string, state?: string | null): Promise<string> {
-  const db = getDb();
-
   try {
-    // Query active schemes, filter by state if available
-    let schemes;
+    const pool = getRawPool();
+    // Use raw SQL to avoid column-mismatch when migrations are pending
+    let sqlQuery: string;
+    let params: any[];
     if (state) {
-      schemes = await db.select()
-        .from(governmentSchemes)
-        .where(
-          and(
-            eq(governmentSchemes.isActive, true),
-            sql`(${governmentSchemes.stateSpecific} IS NULL OR LOWER(${governmentSchemes.stateSpecific}) = LOWER(${state}))`
-          )
-        )
-        .orderBy(desc(governmentSchemes.createdAt))
-        .limit(5);
+      sqlQuery = `SELECT title, title_telugu, title_hindi, title_kannada, category, benefits, eligibility
+        FROM government_schemes WHERE is_active = true
+        AND (state_specific IS NULL OR LOWER(state_specific) = LOWER(?))
+        ORDER BY created_at DESC LIMIT 5`;
+      params = [state];
     } else {
-      schemes = await db.select()
-        .from(governmentSchemes)
-        .where(eq(governmentSchemes.isActive, true))
-        .orderBy(desc(governmentSchemes.createdAt))
-        .limit(5);
+      sqlQuery = `SELECT title, title_telugu, title_hindi, title_kannada, category, benefits, eligibility
+        FROM government_schemes WHERE is_active = true
+        ORDER BY created_at DESC LIMIT 5`;
+      params = [];
     }
+    const [result] = await pool.execute(sqlQuery, params);
+    const schemes = (result as any[]) || [];
 
     const headers: Record<string, string> = {
       english: `📋 *Government Schemes*\n\nActive schemes you may be eligible for:\n\n`,
@@ -1207,9 +1216,9 @@ async function formatSchemesFromDB(lang: string, state?: string | null): Promise
 
     let body = "";
     for (const s of schemes) {
-      const title = lang === "telugu" && s.titleTelugu ? s.titleTelugu
-        : lang === "hindi" && s.titleHindi ? s.titleHindi
-        : lang === "kannada" && s.titleKannada ? s.titleKannada
+      const title = lang === "telugu" && s.title_telugu ? s.title_telugu
+        : lang === "hindi" && s.title_hindi ? s.title_hindi
+        : lang === "kannada" && s.title_kannada ? s.title_kannada
         : s.title;
       const catLabel = s.category ? ` [${s.category.toUpperCase()}]` : "";
       body += `• *${title}*${catLabel}\n`;
@@ -1225,32 +1234,27 @@ async function formatSchemesFromDB(lang: string, state?: string | null): Promise
   }
 }
 
-// Fetch crop knowledge from DB
+// Fetch crop knowledge from DB using raw SQL
 async function formatCropAdviceFromDB(lang: string, farmerCrop?: string | null): Promise<string> {
-  const db = getDb();
-
   try {
-    // If farmer has a primary crop, search for that first
-    let crops;
-    if (farmerCrop) {
-      crops = await db.select()
-        .from(cropKnowledge)
-        .where(
-          and(
-            eq(cropKnowledge.isActive, true),
-            sql`LOWER(${cropKnowledge.cropName}) LIKE LOWER(${'%' + farmerCrop + '%'})`
-          )
-        )
-        .limit(3);
-    }
+    const pool = getRawPool();
+    let sqlQuery: string;
+    let params: any[];
 
-    // If no specific crop found, get general advice
-    if (!crops || crops.length === 0) {
-      crops = await db.select()
-        .from(cropKnowledge)
-        .where(eq(cropKnowledge.isActive, true))
-        .limit(3);
+    if (farmerCrop) {
+      sqlQuery = `SELECT crop_name, crop_name_telugu, crop_name_hindi, crop_name_kannada,
+        title, content, content_telugu, content_hindi, content_kannada, category, stage
+        FROM crop_knowledge WHERE is_active = true
+        AND LOWER(crop_name) LIKE LOWER(?) ORDER BY created_at DESC LIMIT 3`;
+      params = [`%${farmerCrop}%`];
+    } else {
+      sqlQuery = `SELECT crop_name, crop_name_telugu, crop_name_hindi, crop_name_kannada,
+        title, content, content_telugu, content_hindi, content_kannada, category, stage
+        FROM crop_knowledge WHERE is_active = true ORDER BY created_at DESC LIMIT 3`;
+      params = [];
     }
+    const [result] = await pool.execute(sqlQuery, params);
+    const crops = (result as any[]) || [];
 
     const headers: Record<string, string> = {
       english: `💡 *Farming Advice*\n\n`,
@@ -1271,15 +1275,16 @@ async function formatCropAdviceFromDB(lang: string, farmerCrop?: string | null):
 
     let body = "";
     for (const c of crops) {
-      const name = lang === "telugu" && c.cropNameTelugu ? c.cropNameTelugu
-        : lang === "hindi" && c.cropNameHindi ? c.cropNameHindi
-        : lang === "kannada" && c.cropNameKannada ? c.cropNameKannada
-        : c.cropName;
-      body += `• *${name}*${c.variety ? ` (${c.variety})` : ""}\n`;
-      if (c.fertilizer) body += `  🌱 Fertilizer: ${c.fertilizer}\n`;
-      if (c.pestControl) body += `  🐛 Pest Control: ${c.pestControl}\n`;
-      if (c.watering) body += `  💧 Watering: ${c.watering}\n`;
-      if (c.harvestingTips) body += `  🌾 Harvest: ${c.harvestingTips}\n`;
+      const name = lang === "telugu" && c.crop_name_telugu ? c.crop_name_telugu
+        : lang === "hindi" && c.crop_name_hindi ? c.crop_name_hindi
+        : lang === "kannada" && c.crop_name_kannada ? c.crop_name_kannada
+        : c.crop_name;
+      const content = lang === "telugu" && c.content_telugu ? c.content_telugu
+        : lang === "hindi" && c.content_hindi ? c.content_hindi
+        : lang === "kannada" && c.content_kannada ? c.content_kannada
+        : c.content;
+      body += `• *${name}*${c.stage ? ` (${c.stage})` : ""}\n`;
+      if (content) body += `  💡 ${content.substring(0, 120)}${content.length > 120 ? "..." : ""}\n`;
       body += `\n`;
     }
 
@@ -1529,6 +1534,10 @@ async function buildNewsResponseAsync(items: any[], lang: string, headers: Recor
   let body = "";
 
   for (const item of items) {
+    const rawTitle = item.title || "";
+    const rawSummary = item.summary || "";
+    const sourceLang = detectTextLanguage(rawTitle);
+
     // 1. Check DB translation for farmer's language
     let title: string | null = langKey === "telugu" ? (item.title_telugu || item.titleTelugu || null)
       : langKey === "hindi" ? (item.title_hindi || item.titleHindi || null)
@@ -1540,23 +1549,39 @@ async function buildNewsResponseAsync(items: any[], lang: string, headers: Recor
       : langKey === "kannada" ? (item.summary_kannada || item.summaryKannada || null)
       : (item.summary || null);
 
-    // 2. If missing, try on-the-fly translation
-    const rawTitle = item.title || "";
-    const rawSummary = item.summary || "";
-    const sourceLang = detectTextLanguage(rawTitle);
-
+    // 2. If missing and farmer wants non-English, try on-the-fly translation
     if (!title && langKey !== "english") {
-      const translated = await translateText(rawTitle, langKey);
+      // 2a. Try direct translation from source language to target
+      let translated = await translateText(rawTitle, langKey);
+
+      // 2b. If direct fails and source is not English, try via English
+      if (!translated && sourceLang !== "english") {
+        // Check if there's an English version in the title column
+        const titleLang = detectTextLanguage(rawTitle);
+        if (titleLang !== "english") {
+          // title column has non-English text, try to translate it to English first
+          const englishVersion = await translateText(rawTitle, "english");
+          if (englishVersion) {
+            translated = await translateText(englishVersion, langKey);
+          }
+        }
+      }
+
       if (translated) {
         title = translated;
-        // Cache to DB
         const dbField = langKey === "telugu" ? "title_telugu" : langKey === "hindi" ? "title_hindi" : "title_kannada";
         if (item.id) await cacheTranslation(item.id, dbField, translated);
       }
     }
 
     if (!summary && langKey !== "english") {
-      const translated = await translateText(rawSummary, langKey);
+      let translated = await translateText(rawSummary, langKey);
+      if (!translated && sourceLang !== "english") {
+        const englishVersion = await translateText(rawSummary, "english");
+        if (englishVersion) {
+          translated = await translateText(englishVersion, langKey);
+        }
+      }
       if (translated) {
         summary = translated;
         const dbField = langKey === "telugu" ? "summary_telugu" : langKey === "hindi" ? "summary_hindi" : "summary_kannada";
@@ -1564,13 +1589,22 @@ async function buildNewsResponseAsync(items: any[], lang: string, headers: Recor
       }
     }
 
-    // 3. Final fallback — if title is in wrong language, don't show it raw
-    if (!title) title = rawTitle; // last resort
-    if (!summary) summary = rawSummary;
-
-    // If farmer's language is NOT english and the detected source language is different,
-    // add a small note indicating translation
-    const needsNote = langKey !== "english" && sourceLang !== "unknown" && sourceLang !== langKey;
+    // 3. Final fallback — NEVER show Hindi text to a Kannada/Telugu farmer
+    if (!title) {
+      // If title is in a different script than farmer's language, show English notice
+      if (langKey !== "english" && sourceLang !== "english" && sourceLang !== langKey) {
+        title = item.title_english || "News Article"; // show minimal English
+      } else {
+        title = rawTitle;
+      }
+    }
+    if (!summary) {
+      if (langKey !== "english" && sourceLang !== "english" && sourceLang !== langKey) {
+        summary = "(Translation in progress...)";
+      } else {
+        summary = rawSummary;
+      }
+    }
 
     body += `• *${title}*\n  ${summary.substring(0, 120)}${summary.length > 120 ? "..." : ""}\n`;
     if (item.source || item.sourceUrl) body += `  📰 ${item.source || ""}`;
