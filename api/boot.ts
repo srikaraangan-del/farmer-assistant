@@ -784,12 +784,76 @@ async function fetchLocationFromPincode(pincode: string): Promise<{ state: strin
 }
 
 // Geocode a pincode using Open-Meteo
+// Hardcoded lat/lon for major Indian districts (fallback when APIs fail)
+const INDIAN_DISTRICT_COORDS: Record<string, { lat: number; lon: number }> = {
+  "east godavari": { lat: 17.3212, lon: 82.0407 },
+  "west godavari": { lat: 16.7907, lon: 81.3220 },
+  "krishna": { lat: 16.6096, lon: 80.6936 },
+  "guntur": { lat: 16.3008, lon: 80.4420 },
+  "visakhapatnam": { lat: 17.6868, lon: 83.2185 },
+  "chittoor": { lat: 13.2218, lon: 79.1010 },
+  "anantapur": { lat: 14.6819, lon: 77.6006 },
+  "kurnool": { lat: 15.8281, lon: 78.0373 },
+  "nellore": { lat: 14.4426, lon: 79.9865 },
+  "kadapa": { lat: 14.4673, lon: 78.8242 },
+  "hyderabad": { lat: 17.4065, lon: 78.4772 },
+  "rangareddy": { lat: 17.2543, lon: 78.2618 },
+  "medak": { lat: 17.9000, lon: 78.1000 },
+  "karimnagar": { lat: 18.4392, lon: 79.1288 },
+  "warangal": { lat: 17.9689, lon: 79.5941 },
+  "khammam": { lat: 17.2473, lon: 80.1514 },
+  "nalgonda": { lat: 17.0575, lon: 79.2680 },
+  "bangalore": { lat: 12.9716, lon: 77.5946 },
+  "bangalore urban": { lat: 12.9716, lon: 77.5946 },
+  "mumbai": { lat: 19.0760, lon: 72.8777 },
+  "pune": { lat: 18.5204, lon: 73.8567 },
+  "delhi": { lat: 28.7041, lon: 77.1025 },
+  "chennai": { lat: 13.0827, lon: 80.2707 },
+  "kolkata": { lat: 22.5726, lon: 88.3639 },
+  "jaipur": { lat: 26.9124, lon: 75.7873 },
+  "lucknow": { lat: 26.8467, lon: 80.9462 },
+  "kanpur": { lat: 26.4499, lon: 80.3319 },
+  "nagpur": { lat: 21.1458, lon: 79.0882 },
+  "indore": { lat: 22.7196, lon: 75.8577 },
+  "bhopal": { lat: 23.2599, lon: 77.4126 },
+  "ahmedabad": { lat: 23.0225, lon: 72.5714 },
+  "surat": { lat: 21.1702, lon: 72.8311 },
+  "vadodara": { lat: 22.3072, lon: 73.1812 },
+  "coimbatore": { lat: 11.0168, lon: 76.9558 },
+  "madurai": { lat: 9.9252, lon: 78.1198 },
+  "salem": { lat: 11.6643, lon: 78.1460 },
+  "tiruchirappalli": { lat: 10.7905, lon: 78.7047 },
+  "thane": { lat: 19.2183, lon: 72.9781 },
+  "nashik": { lat: 19.9975, lon: 73.7898 },
+  "aurangabad": { lat: 19.8762, lon: 75.3433 },
+  "patna": { lat: 25.5941, lon: 85.1376 },
+  "ranchi": { lat: 23.3441, lon: 85.3096 },
+  "bhubaneswar": { lat: 20.2961, lon: 85.8245 },
+  "cuttack": { lat: 20.4625, lon: 85.8830 },
+  "guwahati": { lat: 26.1445, lon: 91.7362 },
+  "ludhiana": { lat: 30.9010, lon: 75.8573 },
+  "amritsar": { lat: 31.6340, lon: 74.8723 },
+  "jalandhar": { lat: 31.3260, lon: 75.5762 },
+  "kochi": { lat: 9.9312, lon: 76.2673 },
+  "thiruvananthapuram": { lat: 8.5241, lon: 76.9366 },
+  "kozhikode": { lat: 11.2588, lon: 75.7804 },
+  "mysore": { lat: 12.2958, lon: 76.6394 },
+  "hubli": { lat: 15.3647, lon: 75.1240 },
+  "belgaum": { lat: 15.8497, lon: 74.4977 },
+  "gulbarga": { lat: 17.3297, lon: 76.8343 },
+  "shimoga": { lat: 13.9299, lon: 75.5681 },
+  "mangalore": { lat: 12.9141, lon: 74.8560 },
+  "prakasam": { lat: 15.3485, lon: 79.5603 },
+  "spsr nellore": { lat: 14.4426, lon: 79.9865 },
+};
+
 async function geocodePincode(pincode: string): Promise<{ lat: number; lon: number; name: string; district?: string; state?: string } | null> {
   const cleanPin = pincode.trim();
 
   // 1. Try India Post API (best for Indian pincodes)
   try {
-    const res = await fetch(`https://api.postalpincode.in/pincode/${encodeURIComponent(cleanPin)}`);
+    const res = await fetch(`https://api.postalpincode.in/pincode/${encodeURIComponent(cleanPin)}`, { signal: AbortSignal.timeout(10000) });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     if (Array.isArray(data) && data[0]?.PostOffice?.length > 0) {
       const po = data[0].PostOffice[0];
@@ -797,20 +861,27 @@ async function geocodePincode(pincode: string): Promise<{ lat: number; lon: numb
       const state = po.State;
       console.log(`[Pincode] India Post API: ${cleanPin} → ${po.Name}, ${district}, ${state}`);
       if (district && state) {
-        // Geocode the district to get lat/lon
+        // Try hardcoded coords first (most reliable)
+        const key = district.toLowerCase().trim();
+        if (INDIAN_DISTRICT_COORDS[key]) {
+          const c = INDIAN_DISTRICT_COORDS[key];
+          console.log(`[Pincode] Using hardcoded coords for ${district}: ${c.lat}, ${c.lon}`);
+          return { lat: c.lat, lon: c.lon, name: po.Name || district, district, state };
+        }
+        // Fallback: geocode via Open-Meteo
         const geo = await geocodeLocation(district, state);
         if (geo) {
           return { lat: geo.lat, lon: geo.lon, name: po.Name || district, district, state };
         }
       }
     }
-  } catch (e) {
-    console.error(`[Pincode] India Post API error for "${cleanPin}":`, e);
+  } catch (e: any) {
+    console.error(`[Pincode] India Post API error for "${cleanPin}":`, e.message);
   }
 
   // 2. Fallback: Open-Meteo direct pincode search
   try {
-    const res = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(cleanPin)}&count=5&language=en&format=json`);
+    const res = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(cleanPin)}&count=5&language=en&format=json`, { signal: AbortSignal.timeout(10000) });
     const data = await res.json();
     console.log(`[Pincode] Open-Meteo geocode "${cleanPin}":`, JSON.stringify(data.results?.map((r: any) => ({ name: r.name, admin1: r.admin1, country: r.country })) ?? "no results"));
 
@@ -825,8 +896,8 @@ async function geocodePincode(pincode: string): Promise<{ lat: number; lon: numb
         state: best.admin1,
       };
     }
-  } catch (e) {
-    console.error(`[Pincode] Open-Meteo geocoding error for "${cleanPin}":`, e);
+  } catch (e: any) {
+    console.error(`[Pincode] Open-Meteo geocoding error for "${cleanPin}":`, e.message);
   }
 
   console.log(`[Pincode] Could not geocode pincode "${cleanPin}"`);
@@ -1179,23 +1250,32 @@ async function formatMarketPrices(lang: string, district?: string | null, state?
 async function formatSchemesFromDB(lang: string, state?: string | null): Promise<string> {
   try {
     const pool = getRawPool();
-    // Use raw SQL to avoid column-mismatch when migrations are pending
-    let sqlQuery: string;
-    let params: any[];
-    if (state) {
-      sqlQuery = `SELECT title, title_telugu, title_hindi, title_kannada, category, benefits, eligibility
-        FROM government_schemes WHERE is_active = true
-        AND (state_specific IS NULL OR LOWER(state_specific) = LOWER(?))
-        ORDER BY created_at DESC LIMIT 5`;
-      params = [state];
-    } else {
-      sqlQuery = `SELECT title, title_telugu, title_hindi, title_kannada, category, benefits, eligibility
-        FROM government_schemes WHERE is_active = true
-        ORDER BY created_at DESC LIMIT 5`;
-      params = [];
+    // Try with all columns (including kannada) — fallback to basic columns if migration pending
+    let schemes: any[] = [];
+    const tryQueries = [
+      // Query 1: With all translation columns
+      state
+        ? { sql: `SELECT title, title_telugu, title_hindi, title_kannada, category, benefits, eligibility FROM government_schemes WHERE is_active = true AND (state_specific IS NULL OR LOWER(state_specific) = LOWER(?)) ORDER BY created_at DESC LIMIT 5`, params: [state] }
+        : { sql: `SELECT title, title_telugu, title_hindi, title_kannada, category, benefits, eligibility FROM government_schemes WHERE is_active = true ORDER BY created_at DESC LIMIT 5`, params: [] },
+      // Query 2: Fallback without kannada columns
+      state
+        ? { sql: `SELECT title, title_telugu, title_hindi, category, benefits, eligibility FROM government_schemes WHERE is_active = true AND (state_specific IS NULL OR LOWER(state_specific) = LOWER(?)) ORDER BY created_at DESC LIMIT 5`, params: [state] }
+        : { sql: `SELECT title, title_telugu, title_hindi, category, benefits, eligibility FROM government_schemes WHERE is_active = true ORDER BY created_at DESC LIMIT 5`, params: [] },
+      // Query 3: Fallback with only basic columns
+      state
+        ? { sql: `SELECT title, category, benefits, eligibility FROM government_schemes WHERE is_active = true AND (state_specific IS NULL OR LOWER(state_specific) = LOWER(?)) ORDER BY created_at DESC LIMIT 5`, params: [state] }
+        : { sql: `SELECT title, category, benefits, eligibility FROM government_schemes WHERE is_active = true ORDER BY created_at DESC LIMIT 5`, params: [] },
+    ];
+
+    for (const q of tryQueries) {
+      try {
+        const [result] = await pool.execute(q.sql, q.params);
+        schemes = (result as any[]) || [];
+        if (schemes.length > 0) break;
+      } catch (colErr: any) {
+        console.error(`[Schemes] Query failed: ${colErr.message} — trying simpler query...`);
+      }
     }
-    const [result] = await pool.execute(sqlQuery, params);
-    const schemes = (result as any[]) || [];
 
     const headers: Record<string, string> = {
       english: `📋 *Government Schemes*\n\nActive schemes you may be eligible for:\n\n`,
@@ -1238,23 +1318,29 @@ async function formatSchemesFromDB(lang: string, state?: string | null): Promise
 async function formatCropAdviceFromDB(lang: string, farmerCrop?: string | null): Promise<string> {
   try {
     const pool = getRawPool();
-    let sqlQuery: string;
-    let params: any[];
+    // Try with all columns — fallback to simpler queries if migration pending
+    let crops: any[] = [];
+    const likeParam = farmerCrop ? `%${farmerCrop}%` : null;
+    const whereClause = farmerCrop ? ` AND LOWER(crop_name) LIKE LOWER(?)` : ``;
 
-    if (farmerCrop) {
-      sqlQuery = `SELECT crop_name, crop_name_telugu, crop_name_hindi, crop_name_kannada,
-        title, content, content_telugu, content_hindi, content_kannada, category, stage
-        FROM crop_knowledge WHERE is_active = true
-        AND LOWER(crop_name) LIKE LOWER(?) ORDER BY created_at DESC LIMIT 3`;
-      params = [`%${farmerCrop}%`];
-    } else {
-      sqlQuery = `SELECT crop_name, crop_name_telugu, crop_name_hindi, crop_name_kannada,
-        title, content, content_telugu, content_hindi, content_kannada, category, stage
-        FROM crop_knowledge WHERE is_active = true ORDER BY created_at DESC LIMIT 3`;
-      params = [];
+    const tryQueries = [
+      // Query 1: With all translation columns
+      { sql: `SELECT crop_name, crop_name_telugu, crop_name_hindi, crop_name_kannada, title, content, content_telugu, content_hindi, content_kannada, category, stage FROM crop_knowledge WHERE is_active = true${whereClause} ORDER BY created_at DESC LIMIT 3`, params: farmerCrop ? [likeParam] : [] },
+      // Query 2: Without kannada columns
+      { sql: `SELECT crop_name, crop_name_telugu, crop_name_hindi, title, content, content_telugu, content_hindi, category, stage FROM crop_knowledge WHERE is_active = true${whereClause} ORDER BY created_at DESC LIMIT 3`, params: farmerCrop ? [likeParam] : [] },
+      // Query 3: Basic columns only
+      { sql: `SELECT crop_name, title, content, category, stage FROM crop_knowledge WHERE is_active = true${whereClause} ORDER BY created_at DESC LIMIT 3`, params: farmerCrop ? [likeParam] : [] },
+    ];
+
+    for (const q of tryQueries) {
+      try {
+        const [result] = await pool.execute(q.sql, q.params);
+        crops = (result as any[]) || [];
+        if (crops.length > 0) break;
+      } catch (colErr: any) {
+        console.error(`[CropAdvice] Query failed: ${colErr.message} — trying simpler query...`);
+      }
     }
-    const [result] = await pool.execute(sqlQuery, params);
-    const crops = (result as any[]) || [];
 
     const headers: Record<string, string> = {
       english: `💡 *Farming Advice*\n\n`,
@@ -1589,22 +1675,10 @@ async function buildNewsResponseAsync(items: any[], lang: string, headers: Recor
       }
     }
 
-    // 3. Final fallback — NEVER show Hindi text to a Kannada/Telugu farmer
-    if (!title) {
-      // If title is in a different script than farmer's language, show English notice
-      if (langKey !== "english" && sourceLang !== "english" && sourceLang !== langKey) {
-        title = item.title_english || "News Article"; // show minimal English
-      } else {
-        title = rawTitle;
-      }
-    }
-    if (!summary) {
-      if (langKey !== "english" && sourceLang !== "english" && sourceLang !== langKey) {
-        summary = "(Translation in progress...)";
-      } else {
-        summary = rawSummary;
-      }
-    }
+    // 3. Final fallback — show English content when translation is missing
+    // The 'title' and 'summary' columns always store English text
+    if (!title) title = rawTitle || "News";
+    if (!summary) summary = rawSummary || "";
 
     body += `• *${title}*\n  ${summary.substring(0, 120)}${summary.length > 120 ? "..." : ""}\n`;
     if (item.source || item.sourceUrl) body += `  📰 ${item.source || ""}`;
