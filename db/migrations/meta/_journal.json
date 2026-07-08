@@ -22,6 +22,13 @@
       "when": 1783355243950,
       "tag": "0002_melted_hex",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "5",
+      "when": 1783519569083,
+      "tag": "0003_sleepy_zaladane",
+      "breakpoints": true
     }
   ]
 }

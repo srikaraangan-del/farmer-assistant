@@ -184,10 +184,10 @@ async function processIncomingMessage(phoneNumber: string, message: string, cont
             district: location.district,
           }).where(eq(farmers.id, farmerId));
           // Send confirmation with Yes/No buttons
-          const confirmBody = lang === "telugu" ? `📍 మేము మీ లొకేషన్ గుర్తించాము:\n*${location.district}, ${location.state}*\n\nఇది సరైనదా?`
-            : lang === "hindi" ? `📍 हमने आपका स्थान पहचाना:\n*${location.district}, ${location.state}*\n\nक्या यह सही है?`
-            : lang === "kannada" ? `📍 ನಾವು ನಿಮ್ಮ ಸ್ಥಳವನ್ನು ಗುರುತಿಸಿದ್ದೇವೆ:\n*${location.district}, ${location.state}*\n\nಇದು ಸರಿಯಾದದ್ದೇ?`
-            : `📍 We detected your location:\n*${location.district}, ${location.state}*\n\nIs this correct?`;
+          const confirmBody = lang === "telugu" ? `📍 మేము మీ లొకేషన్ గుర్తించాము:\n*${location.district}, ${location.state}*\n\n🌦️ ఈ సమాచారం మీ ప్రాంతానికి సరైన వాతావరణ అప్‌డేట్‌లను పంపించడానికి సహాయపడుతుంది.\n\nఇది సరైనదా?`
+            : lang === "hindi" ? `📍 हमने आपका स्थान पहचाना:\n*${location.district}, ${location.state}*\n\n🌦️ यह जानकारी आपके क्षेत्र के लिए सटीक मौसम अपडेट भेजने में मदद करेगी।\n\nक्या यह सही है?`
+            : lang === "kannada" ? `📍 ನಾವು ನಿಮ್ಮ ಸ್ಥಳವನ್ನು ಗುರುತಿಸಿದ್ದೇವೆ:\n*${location.district}, ${location.state}*\n\n🌦️ ಈ ಮಾಹಿತಿ ನಿಮ್ಮ ಪ್ರದೇಶಕ್ಕಾಗಿ ಸರಿಯಾದ ಹವಾಮಾನ ಅಪ್‌ಡೇಟ್‌ಗಳನ್ನು ಕಳುಹಿಸಲು ಸಹಾಯ ಮಾಡುತ್ತದೆ.\n\nಇದು ಸರಿಯಾದದ್ದೇ?`
+            : `📍 We detected your location:\n*${location.district}, ${location.state}*\n\n🌦️ This helps us send accurate weather updates customized for your area.\n\nIs this correct?`;
           await sendWhatsAppButtons(phoneNumber, confirmBody, [
             { id: "confirm_location_yes", title: lang === "telugu" ? "అవును ✅" : lang === "hindi" ? "हाँ ✅" : lang === "kannada" ? "ಹೌದು ✅" : "Yes ✅" },
             { id: "confirm_location_no", title: lang === "telugu" ? "కాదు ❌" : lang === "hindi" ? "नहीं ❌" : lang === "kannada" ? "ಇಲ್ಲ ❌" : "No ❌" },
@@ -1209,6 +1209,7 @@ async function formatSchemesFromDB(lang: string, state?: string | null): Promise
     for (const s of schemes) {
       const title = lang === "telugu" && s.titleTelugu ? s.titleTelugu
         : lang === "hindi" && s.titleHindi ? s.titleHindi
+        : lang === "kannada" && s.titleKannada ? s.titleKannada
         : s.title;
       const catLabel = s.category ? ` [${s.category.toUpperCase()}]` : "";
       body += `• *${title}*${catLabel}\n`;
@@ -1272,6 +1273,7 @@ async function formatCropAdviceFromDB(lang: string, farmerCrop?: string | null):
     for (const c of crops) {
       const name = lang === "telugu" && c.cropNameTelugu ? c.cropNameTelugu
         : lang === "hindi" && c.cropNameHindi ? c.cropNameHindi
+        : lang === "kannada" && c.cropNameKannada ? c.cropNameKannada
         : c.cropName;
       body += `• *${name}*${c.variety ? ` (${c.variety})` : ""}\n`;
       if (c.fertilizer) body += `  🌱 Fertilizer: ${c.fertilizer}\n`;

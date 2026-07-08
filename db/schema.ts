@@ -202,9 +202,11 @@ export const governmentSchemes = mysqlTable(
     title: varchar("title", { length: 500 }).notNull(),
     titleTelugu: varchar("title_telugu", { length: 500 }),
     titleHindi: varchar("title_hindi", { length: 500 }),
+    titleKannada: varchar("title_kannada", { length: 500 }),
     description: text("description"),
     descriptionTelugu: text("description_telugu"),
     descriptionHindi: text("description_hindi"),
+    descriptionKannada: text("description_kannada"),
     category: mysqlEnum("category", [
       "loan",
       "subsidy",
@@ -314,6 +316,7 @@ export const cropKnowledge = mysqlTable(
     cropName: varchar("crop_name", { length: 255 }).notNull(),
     cropNameTelugu: varchar("crop_name_telugu", { length: 255 }),
     cropNameHindi: varchar("crop_name_hindi", { length: 255 }),
+    cropNameKannada: varchar("crop_name_kannada", { length: 255 }),
     category: mysqlEnum("category", [
       "planting",
       "fertilizer",
@@ -331,6 +334,7 @@ export const cropKnowledge = mysqlTable(
     content: text("content").notNull(),
     contentTelugu: text("content_telugu"),
     contentHindi: text("content_hindi"),
+    contentKannada: text("content_kannada"),
     stage: varchar("stage", { length: 255 }), // crop growth stage
     season: varchar("season", { length: 100 }),
     region: varchar("region", { length: 255 }),
