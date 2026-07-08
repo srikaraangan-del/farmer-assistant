@@ -1604,26 +1604,80 @@ function detectTextLanguage(text: string): "english" | "hindi" | "telugu" | "kan
   return "unknown";
 }
 
-// Translate text using MyMemory API (free, no key needed)
+// Multi-API translation with fallback — optimized for Telugu/Kannada
 async function translateText(text: string, targetLang: string): Promise<string | null> {
   if (!text || text.length < 2) return null;
   const sourceLang = detectTextLanguage(text);
-  const src = sourceLang === "hindi" ? "hi" : sourceLang === "telugu" ? "te" : sourceLang === "kannada" ? "kn" : "en";
   const tgt = targetLang === "telugu" ? "te" : targetLang === "hindi" ? "hi" : targetLang === "kannada" ? "kn" : "en";
-  if (src === tgt) return text; // same language
+  const src = sourceLang === "hindi" ? "hi" : sourceLang === "telugu" ? "te" : sourceLang === "kannada" ? "kn" : "en";
+  if (src === tgt) return text;
 
+  const encoded = encodeURIComponent(text.substring(0, 400));
+
+  // Try 1: Google Translate (free endpoint, no key)
   try {
-    const encoded = encodeURIComponent(text.substring(0, 400));
+    const res = await fetch(
+      `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${src}&tl=${tgt}&dt=t&q=${encoded}`,
+      { signal: AbortSignal.timeout(8000), headers: { "User-Agent": "Mozilla/5.0" } }
+    );
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data) && data[0] && Array.isArray(data[0])) {
+        const translated = data[0].map((s: any) => s[0]).join("");
+        if (translated && translated !== text && translated.length > 0) {
+          return translated;
+        }
+      }
+    }
+  } catch { /* silent fail, try next */ }
+
+  // Try 2: MyMemory API
+  try {
     const res = await fetch(
       `https://api.mymemory.translated.net/get?q=${encoded}&langpair=${src}|${tgt}`,
       { signal: AbortSignal.timeout(8000) }
     );
-    if (!res.ok) return null;
-    const data = await res.json();
-    const translated = data?.responseData?.translatedText;
-    if (!translated || translated.startsWith("TRANSLATION") || translated === text) return null;
-    return translated;
-  } catch { return null; }
+    if (res.ok) {
+      const data = await res.json();
+      const translated = data?.responseData?.translatedText;
+      if (translated && !translated.startsWith("TRANSLATION") && translated !== text) {
+        return translated;
+      }
+    }
+  } catch { /* silent fail, try next */ }
+
+  // Try 3: If source is not English, translate to English first, then to target
+  if (src !== "en") {
+    try {
+      // Get English version
+      const enRes = await fetch(
+        `https://translate.googleapis.com/translate_a/single?client=gtx&sl=${src}&tl=en&dt=t&q=${encoded}`,
+        { signal: AbortSignal.timeout(8000), headers: { "User-Agent": "Mozilla/5.0" } }
+      );
+      if (enRes.ok) {
+        const enData = await enRes.json();
+        if (Array.isArray(enData) && enData[0] && Array.isArray(enData[0])) {
+          const englishText = enData[0].map((s: any) => s[0]).join("");
+          if (englishText && englishText !== text) {
+            const enEncoded = encodeURIComponent(englishText.substring(0, 400));
+            const tgtRes = await fetch(
+              `https://translate.googleapis.com/translate_a/single?client=gtx&sl=en&tl=${tgt}&dt=t&q=${enEncoded}`,
+              { signal: AbortSignal.timeout(8000), headers: { "User-Agent": "Mozilla/5.0" } }
+            );
+            if (tgtRes.ok) {
+              const tgtData = await tgtRes.json();
+              if (Array.isArray(tgtData) && tgtData[0] && Array.isArray(tgtData[0])) {
+                const final = tgtData[0].map((s: any) => s[0]).join("");
+                if (final && final !== englishText && final.length > 0) return final;
+              }
+            }
+          }
+        }
+      }
+    } catch { /* silent fail */ }
+  }
+
+  return null;
 }
 
 // Save a translation to DB for caching
