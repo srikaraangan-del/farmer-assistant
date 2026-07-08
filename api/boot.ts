@@ -1453,7 +1453,7 @@ async function formatNewsFromDB(lang: string): Promise<string> {
     const items = (result as any[]) || [];
 
     if (items.length > 0) {
-      return buildNewsResponse(items, lang, headers);
+      return await buildNewsResponseAsync(items, lang, headers);
     }
     console.log("[News] DB empty - fetching live from RSS...");
   } catch (dbErr: any) {
@@ -1466,7 +1466,7 @@ async function formatNewsFromDB(lang: string): Promise<string> {
     if (liveItems.length > 0) {
       // Save to DB (best effort - don't fail if save errors)
       try { await saveNewsToDB(liveItems); } catch (saveErr: any) { console.error("[News] Save error:", saveErr.message); }
-      return buildNewsResponse(liveItems, lang, headers);
+      return await buildNewsResponseAsync(liveItems, lang, headers);
     }
   } catch (rssErr: any) {
     console.error("[News] RSS fetch failed:", rssErr.message);
@@ -1482,27 +1482,104 @@ async function formatNewsFromDB(lang: string): Promise<string> {
   return noData[lang] ?? noData.english;
 }
 
-// Build formatted news response from items (works with both DB rows and RSS items)
-function buildNewsResponse(items: any[], lang: string, headers: Record<string, string>): string {
+// Detect text language using Unicode range checks
+function detectTextLanguage(text: string): "english" | "hindi" | "telugu" | "kannada" | "unknown" {
+  if (/[\u0900-\u097F]/.test(text)) return "hindi";      // Devanagari
+  if (/[\u0C00-\u0C7F]/.test(text)) return "telugu";      // Telugu
+  if (/[\u0C80-\u0CFF]/.test(text)) return "kannada";     // Kannada
+  if (/[a-zA-Z]/.test(text)) return "english";             // Latin
+  return "unknown";
+}
+
+// Translate text using MyMemory API (free, no key needed)
+async function translateText(text: string, targetLang: string): Promise<string | null> {
+  if (!text || text.length < 2) return null;
+  const sourceLang = detectTextLanguage(text);
+  const src = sourceLang === "hindi" ? "hi" : sourceLang === "telugu" ? "te" : sourceLang === "kannada" ? "kn" : "en";
+  const tgt = targetLang === "telugu" ? "te" : targetLang === "hindi" ? "hi" : targetLang === "kannada" ? "kn" : "en";
+  if (src === tgt) return text; // same language
+
+  try {
+    const encoded = encodeURIComponent(text.substring(0, 400));
+    const res = await fetch(
+      `https://api.mymemory.translated.net/get?q=${encoded}&langpair=${src}|${tgt}`,
+      { signal: AbortSignal.timeout(8000) }
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    const translated = data?.responseData?.translatedText;
+    if (!translated || translated.startsWith("TRANSLATION") || translated === text) return null;
+    return translated;
+  } catch { return null; }
+}
+
+// Save a translation to DB for caching
+async function cacheTranslation(newsId: number, field: string, value: string): Promise<void> {
+  try {
+    const pool = getRawPool();
+    await pool.execute(`UPDATE daily_news SET ${field} = ? WHERE id = ?`, [value, newsId]);
+  } catch { /* ignore cache errors */ }
+}
+
+// Build formatted news response — with on-the-fly translation fallback
+async function buildNewsResponseAsync(items: any[], lang: string, headers: Record<string, string>): Promise<string> {
+  const langKey = lang === "telugu" ? "telugu" : lang === "hindi" ? "hindi" : lang === "kannada" ? "kannada" : "english";
   let body = "";
+
   for (const item of items) {
-    const title = lang === "telugu" && (item.title_telugu || item.titleTelugu) ? (item.title_telugu || item.titleTelugu)
-      : lang === "hindi" && (item.title_hindi || item.titleHindi) ? (item.title_hindi || item.titleHindi)
-      : lang === "kannada" && (item.title_kannada || item.titleKannada) ? (item.title_kannada || item.titleKannada)
-      : (item.title || "News");
-    const summary = lang === "telugu" && (item.summary_telugu || item.summaryTelugu) ? (item.summary_telugu || item.summaryTelugu)
-      : lang === "hindi" && (item.summary_hindi || item.summaryHindi) ? (item.summary_hindi || item.summaryHindi)
-      : lang === "kannada" && (item.summary_kannada || item.summaryKannada) ? (item.summary_kannada || item.summaryKannada)
-      : (item.summary || "");
+    // 1. Check DB translation for farmer's language
+    let title: string | null = langKey === "telugu" ? (item.title_telugu || item.titleTelugu || null)
+      : langKey === "hindi" ? (item.title_hindi || item.titleHindi || null)
+      : langKey === "kannada" ? (item.title_kannada || item.titleKannada || null)
+      : (item.title || null);
+
+    let summary: string | null = langKey === "telugu" ? (item.summary_telugu || item.summaryTelugu || null)
+      : langKey === "hindi" ? (item.summary_hindi || item.summaryHindi || null)
+      : langKey === "kannada" ? (item.summary_kannada || item.summaryKannada || null)
+      : (item.summary || null);
+
+    // 2. If missing, try on-the-fly translation
+    const rawTitle = item.title || "";
+    const rawSummary = item.summary || "";
+    const sourceLang = detectTextLanguage(rawTitle);
+
+    if (!title && langKey !== "english") {
+      const translated = await translateText(rawTitle, langKey);
+      if (translated) {
+        title = translated;
+        // Cache to DB
+        const dbField = langKey === "telugu" ? "title_telugu" : langKey === "hindi" ? "title_hindi" : "title_kannada";
+        if (item.id) await cacheTranslation(item.id, dbField, translated);
+      }
+    }
+
+    if (!summary && langKey !== "english") {
+      const translated = await translateText(rawSummary, langKey);
+      if (translated) {
+        summary = translated;
+        const dbField = langKey === "telugu" ? "summary_telugu" : langKey === "hindi" ? "summary_hindi" : "summary_kannada";
+        if (item.id) await cacheTranslation(item.id, dbField, translated);
+      }
+    }
+
+    // 3. Final fallback — if title is in wrong language, don't show it raw
+    if (!title) title = rawTitle; // last resort
+    if (!summary) summary = rawSummary;
+
+    // If farmer's language is NOT english and the detected source language is different,
+    // add a small note indicating translation
+    const needsNote = langKey !== "english" && sourceLang !== "unknown" && sourceLang !== langKey;
+
     body += `• *${title}*\n  ${summary.substring(0, 120)}${summary.length > 120 ? "..." : ""}\n`;
     if (item.source || item.sourceUrl) body += `  📰 ${item.source || ""}`;
     if (item.source_url || item.sourceUrl) body += ` — ${item.source_url || item.sourceUrl || ""}`;
     body += `\n\n`;
   }
-  return (headers[lang] ?? headers.english) + body;
+
+  return (headers[langKey] ?? headers.english) + body;
 }
 
-// Fetch live news from RSS sources (self-contained, no external dependencies)
+// Fetch live news from RSS sources — normalize all titles to English, translate to regional languages
 async function fetchLiveNews(): Promise<any[]> {
   const allNews: any[] = [];
   const sources = [
@@ -1516,7 +1593,58 @@ async function fetchLiveNews(): Promise<any[]> {
       if (!res.ok) continue;
       const xml = await res.text();
       const items = parseNewsRSS(xml, src.name);
-      for (const item of items.slice(0, 5)) allNews.push(item);
+      for (const raw of items.slice(0, 5)) {
+        // Detect language of RSS content
+        const titleLang = detectTextLanguage(raw.title);
+        const summaryLang = detectTextLanguage(raw.summary);
+
+        let englishTitle = raw.title;
+        let englishSummary = raw.summary;
+        let titleHindi: string | undefined;
+        let titleTelugu: string | undefined;
+        let titleKannada: string | undefined;
+        let summaryHindi: string | undefined;
+        let summaryTelugu: string | undefined;
+        let summaryKannada: string | undefined;
+
+        // If RSS title is in Hindi, translate to English for the base column
+        if (titleLang === "hindi") {
+          titleHindi = raw.title;
+          const en = await translateText(raw.title, "english");
+          if (en) englishTitle = en;
+        }
+        if (summaryLang === "hindi") {
+          summaryHindi = raw.summary;
+          const en = await translateText(raw.summary, "english");
+          if (en) englishSummary = en;
+        }
+
+        // Translate English title to all regional languages
+        const [tTe, tHi, tKn] = await Promise.all([
+          translateText(englishTitle, "telugu"),
+          titleLang !== "hindi" ? translateText(englishTitle, "hindi") : Promise.resolve(titleHindi),
+          translateText(englishTitle, "kannada"),
+        ]);
+        if (tTe) titleTelugu = tTe;
+        if (tHi) titleHindi = tHi;
+        if (tKn) titleKannada = tKn;
+
+        const [sTe, sHi, sKn] = await Promise.all([
+          translateText(englishSummary, "telugu"),
+          summaryLang !== "hindi" ? translateText(englishSummary, "hindi") : Promise.resolve(summaryHindi),
+          translateText(englishSummary, "kannada"),
+        ]);
+        if (sTe) summaryTelugu = sTe;
+        if (sHi) summaryHindi = sHi;
+        if (sKn) summaryKannada = sKn;
+
+        allNews.push({
+          title: englishTitle, summary: englishSummary,
+          title_telugu: titleTelugu, title_hindi: titleHindi, title_kannada: titleKannada,
+          summary_telugu: summaryTelugu, summary_hindi: summaryHindi, summary_kannada: summaryKannada,
+          source: src.name, source_url: raw.source_url, sourceUrl: raw.sourceUrl,
+        });
+      }
     } catch (e: any) { console.error(`[News] RSS ${src.name}:`, e.message); }
   }
   return allNews;
@@ -1552,13 +1680,19 @@ function stripHtmlTags(html: string): string {
   return html.replace(/<[^>]+>/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, " ").replace(/\s+/g, " ").trim();
 }
 
-// Save fetched news to DB (best effort)
+// Save fetched news to DB (best effort) — includes translations
 async function saveNewsToDB(items: any[]): Promise<void> {
   const db = getDb();
   for (const item of items) {
     try {
       await db.insert(dailyNews).values({
         title: item.title, summary: item.summary,
+        titleTelugu: item.title_telugu || item.titleTelugu,
+        titleHindi: item.title_hindi || item.titleHindi,
+        titleKannada: item.title_kannada || item.titleKannada,
+        summaryTelugu: item.summary_telugu || item.summaryTelugu,
+        summaryHindi: item.summary_hindi || item.summaryHindi,
+        summaryKannada: item.summary_kannada || item.summaryKannada,
         source: item.source, sourceUrl: item.source_url || item.sourceUrl,
         category: "general", fetchedAt: new Date(),
       });
