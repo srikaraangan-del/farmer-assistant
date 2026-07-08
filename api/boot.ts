@@ -1437,50 +1437,132 @@ async function getCropAdviceByName(cropName: string, lang: string): Promise<stri
 
 // Fetch daily farming news from DB
 async function formatNewsFromDB(lang: string): Promise<string> {
-  const db = getDb();
+  const headers: Record<string, string> = {
+    english: `📰 *Daily Farming News*\n\nLatest agriculture updates:\n\n`,
+    hindi: `📰 *दैनिक कृषि समाचार*\n\nनवीनतम कृषि अपडेट:\n\n`,
+    telugu: `📰 *రోజువారీ వ్యవసాయ వార్తలు*\n\nతాజా వ్యవసాయ అప్‌డేట్‌లు:\n\n`,
+    kannada: `📰 *ದೈನಂದಿನ ಕೃಷಿ ಸುದ್ದಿ*\n\nತಾಜಾ ಕೃಷಿ ಅಪ್‌ಡೇಟ್‌ಗಳು:\n\n`,
+  };
+
+  // Try 1: Fetch from DB using raw SQL (avoids column-mismatch issues with Drizzle)
   try {
-    const items = await db.select().from(dailyNews)
-      .where(eq(dailyNews.isActive, true))
-      .orderBy(desc(dailyNews.fetchedAt))
-      .limit(5);
+    const pool = getRawPool();
+    const [result] = await pool.execute(
+      "SELECT title, title_telugu, title_hindi, title_kannada, summary, summary_telugu, summary_hindi, summary_kannada, source, source_url FROM daily_news WHERE is_active = true ORDER BY fetched_at DESC LIMIT 5"
+    );
+    const items = (result as any[]) || [];
 
-    const headers: Record<string, string> = {
-      english: `📰 *Daily Farming News*\n\nLatest agriculture updates:\n\n`,
-      hindi: `📰 *दैनिक कृषि समाचार*\n\nनवीनतम कृषि अपडेट:\n\n`,
-      telugu: `📰 *రోజువారీ వ్యవసాయ వార్తలు*\n\nతాజా వ్యవసాయ అప్‌డేట్‌లు:\n\n`,
-      kannada: `📰 *ದೈನಂದಿನ ಕೃಷಿ ಸುದ್ದಿ*\n\nತಾಜಾ ಕೃಷಿ ಅಪ್‌ಡೇಟ್‌ಗಳು:\n\n`,
-    };
-
-    if (items.length === 0) {
-      const noData: Record<string, string> = {
-        english: `📰 *Daily Farming News*\n\nNo news articles available yet.\nCheck back later for the latest farming updates.`,
-        hindi: `📰 *दैनिक कृषि समाचार*\n\nअभी कोई समाचार लेख उपलब्ध नहीं।\nनवीनतम कृषि अपडेट के लिए बाद में जांचें।`,
-        telugu: `📰 *రోజువారీ వ్యవసాయ వార్తలు*\n\nఇంకా వార్తా కథనాలు అందుబాటులో లేవు.\nతాజా వ్యవసాయ అప్‌డేట్‌ల కోసం తర్వాత తనిఖీ చేయండి.`,
-        kannada: `📰 *ದೈನಂದಿನ ಕೃಷಿ ಸುದ್ದಿ*\n\nಇನ್ನೂ ಸುದ್ದಿ ಲೇಖನಗಳು ಲಭ್ಯವಿಲ್ಲ.\nತಾಜಾ ಕೃಷಿ ಅಪ್‌ಡೇಟ್‌ಗಳಿಗಾಗಿ ನಂತರ ಪರಿಶೀಲಿಸಿ.`,
-      };
-      return noData[lang] ?? noData.english;
+    if (items.length > 0) {
+      return buildNewsResponse(items, lang, headers);
     }
+    console.log("[News] DB empty - fetching live from RSS...");
+  } catch (dbErr: any) {
+    console.error("[News] DB query failed:", dbErr.message, "- fetching live from RSS...");
+  }
 
-    let body = "";
-    for (const item of items) {
-      const title = lang === "telugu" && item.titleTelugu ? item.titleTelugu
-        : lang === "hindi" && item.titleHindi ? item.titleHindi
-        : lang === "kannada" && item.titleKannada ? item.titleKannada
-        : item.title;
-      const summary = lang === "telugu" && item.summaryTelugu ? item.summaryTelugu
-        : lang === "hindi" && item.summaryHindi ? item.summaryHindi
-        : lang === "kannada" && item.summaryKannada ? item.summaryKannada
-        : item.summary;
-      body += `• *${title}*\n  ${summary.substring(0, 120)}${summary.length > 120 ? "..." : ""}\n`;
-      if (item.source) body += `  📰 ${item.source}`;
-      if (item.sourceUrl) body += ` — ${item.sourceUrl}`;
-      body += `\n\n`;
+  // Try 2: DB empty or error → fetch live from RSS, save, and return
+  try {
+    const liveItems = await fetchLiveNews();
+    if (liveItems.length > 0) {
+      // Save to DB (best effort - don't fail if save errors)
+      try { await saveNewsToDB(liveItems); } catch (saveErr: any) { console.error("[News] Save error:", saveErr.message); }
+      return buildNewsResponse(liveItems, lang, headers);
     }
+  } catch (rssErr: any) {
+    console.error("[News] RSS fetch failed:", rssErr.message);
+  }
 
-    return (headers[lang] ?? headers.english) + body;
-  } catch (e: any) {
-    console.error("[News] DB error:", e.message);
-    return `📰 *Daily News*\n\nUnable to fetch news. Please try again later.`;
+  // Fallback: no news available
+  const noData: Record<string, string> = {
+    english: `📰 *Daily Farming News*\n\nNo news articles available at the moment.\nPlease try again later.`,
+    hindi: `📰 *दैनिक कृषि समाचार*\n\nफिलहाल कोई समाचार लेख उपलब्ध नहीं।\nकृपया बाद में पुनः प्रयास करें।`,
+    telugu: `📰 *రోజువారీ వ్యవసాయ వార్తలు*\n\nప్రస్తుతం వార్తా కథనాలు అందుబాటులో లేవు.\nదయచేసి తర్వాత మళ్లీ ప్రయత్నించండి.`,
+    kannada: `📰 *ದೈನಂದಿನ ಕೃಷಿ ಸುದ್ದಿ*\n\nಪ್ರಸ್ತುತ ಸುದ್ದಿ ಲೇಖನಗಳು ಲಭ್ಯವಿಲ್ಲ.\nದಯವಿಟ್ಟು ನಂತರ ಮತ್ತೆ ಪ್ರಯತ್ನಿಸಿ.`,
+  };
+  return noData[lang] ?? noData.english;
+}
+
+// Build formatted news response from items (works with both DB rows and RSS items)
+function buildNewsResponse(items: any[], lang: string, headers: Record<string, string>): string {
+  let body = "";
+  for (const item of items) {
+    const title = lang === "telugu" && (item.title_telugu || item.titleTelugu) ? (item.title_telugu || item.titleTelugu)
+      : lang === "hindi" && (item.title_hindi || item.titleHindi) ? (item.title_hindi || item.titleHindi)
+      : lang === "kannada" && (item.title_kannada || item.titleKannada) ? (item.title_kannada || item.titleKannada)
+      : (item.title || "News");
+    const summary = lang === "telugu" && (item.summary_telugu || item.summaryTelugu) ? (item.summary_telugu || item.summaryTelugu)
+      : lang === "hindi" && (item.summary_hindi || item.summaryHindi) ? (item.summary_hindi || item.summaryHindi)
+      : lang === "kannada" && (item.summary_kannada || item.summaryKannada) ? (item.summary_kannada || item.summaryKannada)
+      : (item.summary || "");
+    body += `• *${title}*\n  ${summary.substring(0, 120)}${summary.length > 120 ? "..." : ""}\n`;
+    if (item.source || item.sourceUrl) body += `  📰 ${item.source || ""}`;
+    if (item.source_url || item.sourceUrl) body += ` — ${item.source_url || item.sourceUrl || ""}`;
+    body += `\n\n`;
+  }
+  return (headers[lang] ?? headers.english) + body;
+}
+
+// Fetch live news from RSS sources (self-contained, no external dependencies)
+async function fetchLiveNews(): Promise<any[]> {
+  const allNews: any[] = [];
+  const sources = [
+    { url: "https://www.thehindu.com/agriculture/feeder/default.rss", name: "The Hindu" },
+    { url: "https://krishakjagat.org/feed/", name: "Krishak Jagat" },
+  ];
+
+  for (const src of sources) {
+    try {
+      const res = await fetch(src.url, { headers: { "User-Agent": "Krishiva-Bot/1.0" }, signal: AbortSignal.timeout(15000) });
+      if (!res.ok) continue;
+      const xml = await res.text();
+      const items = parseNewsRSS(xml, src.name);
+      for (const item of items.slice(0, 5)) allNews.push(item);
+    } catch (e: any) { console.error(`[News] RSS ${src.name}:`, e.message); }
+  }
+  return allNews;
+}
+
+// Parse RSS XML to news items
+function parseNewsRSS(xml: string, source: string): any[] {
+  const items: any[] = [];
+  const itemRegex = /<item>([\s\S]*?)<\/item>/g;
+  let match;
+  while ((match = itemRegex.exec(xml)) !== null) {
+    const itemXml = match[1];
+    const title = extractRSSTag(itemXml, "title");
+    const desc = extractRSSTag(itemXml, "description");
+    const link = extractRSSTag(itemXml, "link");
+    if (title) {
+      items.push({
+        title, summary: stripHtmlTags(desc || title).substring(0, 500),
+        source, source_url: link || undefined, sourceUrl: link || undefined,
+      });
+    }
+  }
+  return items;
+}
+
+function extractRSSTag(xml: string, tag: string): string {
+  const regex = new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`);
+  const m = xml.match(regex);
+  return m ? m[1].trim() : "";
+}
+
+function stripHtmlTags(html: string): string {
+  return html.replace(/<[^>]+>/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, " ").replace(/\s+/g, " ").trim();
+}
+
+// Save fetched news to DB (best effort)
+async function saveNewsToDB(items: any[]): Promise<void> {
+  const db = getDb();
+  for (const item of items) {
+    try {
+      await db.insert(dailyNews).values({
+        title: item.title, summary: item.summary,
+        source: item.source, sourceUrl: item.source_url || item.sourceUrl,
+        category: "general", fetchedAt: new Date(),
+      });
+    } catch (e: any) { /* ignore duplicates */ }
   }
 }
 
