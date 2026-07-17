@@ -1183,67 +1183,210 @@ function detectIntent(message: string): string {
 // ====== DB-DRIVEN RESPONSE FUNCTIONS ======
 
 // Fetch market prices from DB for farmer's state/district
-async function formatMarketPrices(lang: string, district?: string | null, state?: string | null): Promise<string> {
-  const db = getDb();
-  const locLabel = district ? `${district}${state ? `, ${state}` : ""}` : (state ?? "All India");
-
+// Fetch live mandi prices from Krishi Jagat
+async function fetchLiveMandiPrices(state?: string | null): Promise<any[]> {
   try {
-    // Query latest prices from DB, filter by state if available
-    const conditions = [eq(marketPrices.isActive, true)];
-    if (state) conditions.push(sql`LOWER(${marketPrices.state}) = LOWER(${state})`);
+    // Try Krishi Jagat mandi page
+    const res = await fetch("https://krishakjagat.org/mandi-bhav/", {
+      headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" },
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!res.ok) return [];
+    const html = await res.text();
 
-    const prices = await db.select()
-      .from(marketPrices)
-      .where(and(...conditions))
-      .orderBy(desc(marketPrices.priceDate))
-      .limit(5);
-
-    // If no results for the state, get all active prices
-    let data = prices;
-    if (data.length === 0) {
-      data = await db.select()
-        .from(marketPrices)
-        .where(eq(marketPrices.isActive, true))
-        .orderBy(desc(marketPrices.priceDate))
-        .limit(5);
-    }
-
-    const trendEmoji = (t: string) => t === "up" ? "⬆️" : t === "down" ? "⬇️" : "➡️";
-
-    const headers: Record<string, string> = {
-      english: `💰 *Market Prices*\n📍 ${locLabel}\n\nLatest mandi rates:\n\n`,
-      hindi: `💰 *बाजार भाव*\n📍 ${locLabel}\n\nनवीनतम मंडी दर:\n\n`,
-      telugu: `💰 *మార్కెట్ ధరలు*\n📍 ${locLabel}\n\nతాజా మండి ధరలు:\n\n`,
-      kannada: `💰 *ಬಜಾರ ಬೆಲೆಗಳು*\n📍 ${locLabel}\n\nತಾಜಾ ಮಂಡಿ ದರಗಳು:\n\n`,
-    };
-
-    if (data.length === 0) {
-      const noData: Record<string, string> = {
-        english: `💰 *Market Prices*\n📍 ${locLabel}\n\nNo price data available for your area.\nPlease check the Market Prices section on the dashboard.`,
-        hindi: `💰 *बाजार भाव*\n📍 ${locLabel}\n\nआपके क्षेत्र के लिए कोई मूल्य डेटा उपलब्ध नहीं।\nकृपया डैशबोर्ड पर बाजार भाव अनुभाग देखें।`,
-        telugu: `💰 *మార్కెట్ ధరలు*\n📍 ${locLabel}\n\nమీ ప్రాంతానికి ధర డేటా అందుబాటులో లేదు.\nదయచేసి డాష్‌బోర్డ్‌లో మార్కెట్ ధరల విభాగాన్ని చూడండి.`,
-        kannada: `💰 *ಬಜಾರ ಬೆಲೆಗಳು*\n📍 ${locLabel}\n\nನಿಮ್ಮ ಪ್ರದೇಶಕ್ಕೆ ಬೆಲೆ ಡೇಟಾ ಲಭ್ಯವಿಲ್ಲ.\nದಯವಿಟ್ಟು ಡ್ಯಾಶ್‌ಬೋರ್ಡ್‌ನಲ್ಲಿ ಮಾರುಕಟ್ಟೆ ಬೆಲೆ ವಿಭಾಗವನ್ನು ನೋಡಿ.`,
-      };
-      return noData[lang] ?? noData.english;
-    }
-
-    let body = "";
-    for (const p of data) {
-      const variety = p.variety ? ` (${p.variety})` : "";
-      const mandi = p.mandiName ? ` @ ${p.mandiName}` : "";
-      const trend = p.priceTrend ?? "stable";
-      body += `• *${p.commodity}${variety}*${mandi}\n  ₹${p.pricePerQuintal.toLocaleString("en-IN")}/quintal ${trendEmoji(trend)}`;
-      if (p.minPrice && p.maxPrice) {
-        body += ` (Range: ₹${p.minPrice}-₹${p.maxPrice})`;
+    // Extract price articles from the HTML
+    const prices: any[] = [];
+    // Look for article patterns with commodity and price info
+    const articleRegex = /<article[^>]*>[\s\S]*?<h[23][^>]*>(.*?)<\/h[23]>[\s\S]*?(?:<p[^>]*>(.*?)<\/p>)?[\s\S]*?<\/article>/gi;
+    let match;
+    while ((match = articleRegex.exec(html)) !== null) {
+      const title = stripHtmlTags(match[1]).trim();
+      const content = stripHtmlTags(match[2] || "").trim();
+      if (title && containsPriceInfo(title)) {
+        prices.push({ title, content, source: "Krishi Jagat Mandi" });
       }
-      body += `\n`;
     }
 
-    return (headers[lang] ?? headers.english) + body;
+    // Also try the main RSS for price-related articles
+    if (prices.length === 0) {
+      const rssRes = await fetch("https://krishakjagat.org/feed/", {
+        headers: { "User-Agent": "Mozilla/5.0" },
+        signal: AbortSignal.timeout(10000),
+      });
+      if (rssRes.ok) {
+        const rssXml = await rssRes.text();
+        const items = parseNewsRSS(rssXml, "Krishak Jagat");
+        for (const item of items) {
+          if (containsPriceInfo(item.title)) {
+            prices.push({ title: item.title, content: item.summary, source: "Krishak Jagat" });
+          }
+        }
+      }
+    }
+
+    return prices;
+  } catch (e: any) {
+    console.error("[MandiPrices] Fetch error:", e.message);
+    return [];
+  }
+}
+
+// Check if text contains price information (₹ symbol, price keywords, numbers)
+function containsPriceInfo(text: string): boolean {
+  const priceKeywords = [
+    "₹", "rs", "rupees", "रुपये", "per kg", "per quintal", "per ton",
+    "/kg", "/quintal", "/ton", "price", "rate", "भाव", "दर",
+    "mandi", "market", "bazar", "मंडी", "बाजार",
+    "buy", "sell", "purchase", "sale", "खरीद", "बिक्री",
+  ];
+  const lower = text.toLowerCase();
+  return priceKeywords.some(kw => lower.includes(kw.toLowerCase())) && /\d/.test(text);
+}
+
+// Extract price details from article title using regex patterns
+function parsePriceFromTitle(title: string): { commodity?: string; price?: string; unit?: string; mandi?: string } {
+  const result: { commodity?: string; price?: string; unit?: string; mandi?: string } = {};
+
+  // Match price patterns: ₹500, ₹ 500, 500/-, 500 rs, etc.
+  const priceMatch = title.match(/[₹Rs\.\s]*(\d+(?:,\d+)*(?:\.\d+)?)\s*(?:\/\s*(kg|quintal|ton|tonne)|\s*(kg|quintal|ton|tonne)|\/-|rs|rupees|rupaye)?/i);
+  if (priceMatch) {
+    result.price = priceMatch[1];
+    result.unit = priceMatch[2] || priceMatch[3] || "quintal";
+  }
+
+  // Extract commodity names (common Indian crops)
+  const commodityKeywords = [
+    "rice", "wheat", "corn", "maize", "soybean", "cotton", "sugarcane",
+    "paddy", "bajra", "jowar", "ragi", "barley", "gram", "moong",
+    "urad", "arhar", "tur", "lentil", "mustard", "groundnut", "peanut",
+    "sunflower", "sesame", "onion", "potato", "tomato", "garlic",
+    "chilli", "turmeric", "ginger", "coriander", "cumin", "cardamom",
+    "black pepper", "clove", "cinnamon", "jute", "tea", "coffee",
+    "apple", "mango", "banana", "orange", "grapes", "pomegranate",
+    "cauliflower", "cabbage", "brinjal", "okra", "bitter gourd",
+    "green gram", "red gram", "black gram", " Bengal gram",
+    "ধান", "গম", "ভুট্টা", "সয়াবিন", "তুলা", "আলু", "পেঁয়াজ",
+    "चावल", "गेहूं", "मक्का", "सोयाबीन", "कपास", "गन्ना",
+    "బియ్యం", "గోధుమ", "మొక్కజొన్న", "సోయాబీన్", "పత్తి",
+    "ಅಕ್ಕಿ", "ಗೋಧಿ", "ಮೆಕ್ಕೆಜೋಳ", "ಸೋಯಾಬೀನ್", "ಹತ್ತಿ",
+  ];
+  const lowerTitle = title.toLowerCase();
+  for (const crop of commodityKeywords) {
+    if (lowerTitle.includes(crop.toLowerCase())) {
+      result.commodity = crop.charAt(0).toUpperCase() + crop.slice(1);
+      break;
+    }
+  }
+
+  return result;
+}
+
+// Common commodity translations for 4 languages
+const COMMODITY_NAMES: Record<string, Record<string, string>> = {
+  rice: { telugu: "బియ్యం", hindi: "चावल", kannada: "ಅಕ್ಕಿ", english: "Rice" },
+  wheat: { telugu: "గోధుమ", hindi: "गेहूं", kannada: "ಗೋಧಿ", english: "Wheat" },
+  corn: { telugu: "మొక్కజొన్న", hindi: "मक्का", kannada: "ಮೆಕ್ಕೆಜೋಳ", english: "Corn/Maize" },
+  maize: { telugu: "మొక్కజొన్న", hindi: "मक्का", kannada: "ಮೆಕ್ಕೆಜೋಳ", english: "Maize" },
+  soybean: { telugu: "సోయాబీన్", hindi: "सोयाबीन", kannada: "ಸೋಯಾಬೀನ್", english: "Soybean" },
+  cotton: { telugu: "పత్తి", hindi: "कपास", kannada: "ಹತ್ತಿ", english: "Cotton" },
+  paddy: { telugu: "వరి", hindi: "धान", kannada: "ಭತ್ತ", english: "Paddy" },
+  gram: { telugu: "శనగ", hindi: "चना", kannada: "ಕಡಲೆ", english: "Gram" },
+  groundnut: { telugu: "వేరుశనగ", hindi: "मूंगफली", kannada: "ಕಡಲೆಕಾಯಿ", english: "Groundnut" },
+  peanut: { telugu: "వేరుశనగ", hindi: "मूंगफली", kannada: "ಕಡಲೆಕಾಯಿ", english: "Peanut" },
+  onion: { telugu: "ఉల్లిపాయ", hindi: "प्याज", kannada: "ಈರುಳ್ಳಿ", english: "Onion" },
+  potato: { telugu: "బంగాళాదుంప", hindi: "आलू", kannada: "ಆಲೂಗಡ್ಡೆ", english: "Potato" },
+  tomato: { telugu: "టమాటో", hindi: "टमाटर", kannada: "ಟೊಮ್ಯಾಟೊ", english: "Tomato" },
+  chilli: { telugu: "మిరప", hindi: "मिर्च", kannada: "ಮೆಣಸು", english: "Chilli" },
+  turmeric: { telugu: "పసుపు", hindi: "हल्दी", kannada: "ಅರಿಶಿನ", english: "Turmeric" },
+  garlic: { telugu: "వెల్లుల్లి", hindi: "लहसुन", kannada: "ಬೆಳ್ಳುಳ್ಳಿ", english: "Garlic" },
+  bajra: { telugu: "సజ్జ", hindi: "बाजरा", kannada: "ಸಜ್ಜೆ", english: "Bajra" },
+  jowar: { telugu: "జొన్న", hindi: "ज्वार", kannada: "ಜೋಳ", english: "Jowar" },
+  moong: { telugu: "పెసర", hindi: "मूंग", kannada: "ಹೆಸರು", english: "Moong" },
+  urad: { telugu: "మినుము", hindi: "उड़द", kannada: "ಉದ್ದು", english: "Urad" },
+  arhar: { telugu: "కంది", hindi: "अरहर", kannada: "ತೊಗರಿ", english: "Arhar/Tur" },
+  mustard: { telugu: "ఆవాలు", hindi: "सरसों", kannada: "ಸಾಸಿವೆ", english: "Mustard" },
+  sugarcane: { telugu: "చెరకు", hindi: "गन्ना", kannada: "ಕಬ್ಬು", english: "Sugarcane" },
+};
+
+// Get commodity name in farmer's language
+function getCommodityName(commodity: string, lang: string): string {
+  const key = commodity.toLowerCase();
+  const langKey = lang === "telugu" ? "telugu" : lang === "hindi" ? "hindi" : lang === "kannada" ? "kannada" : "english";
+  return COMMODITY_NAMES[key]?.[langKey] || commodity;
+}
+
+async function formatMarketPrices(lang: string, district?: string | null, state?: string | null): Promise<string> {
+  const locLabel = district ? `${district}${state ? `, ${state}` : ""}` : (state ?? "All India");
+  const trendEmoji = (t: string) => t === "up" ? "⬆️" : t === "down" ? "⬇️" : "➡️";
+
+  const headers: Record<string, string> = {
+    english: `💰 *Market Prices*\n📍 ${locLabel}\n\nLatest mandi rates:\n\n`,
+    hindi: `💰 *बाजार भाव*\n📍 ${locLabel}\n\nनवीनतम मंडी दर:\n\n`,
+    telugu: `💰 *మార్కెట్ ధరలు*\n📍 ${locLabel}\n\nతాజా మండి ధరలు:\n\n`,
+    kannada: `💰 *ಮಾರುಕಟ್ಟೆ ಬೆಲೆಗಳು*\n📍 ${locLabel}\n\nತಾಜಾ ಮಂಡಿ ದರಗಳು:\n\n`,
+  };
+
+  // Try 1: Fetch live mandi prices from Krishi Jagat
+  const livePrices = await fetchLiveMandiPrices(state);
+  if (livePrices.length > 0) {
+    let body = "";
+    let count = 0;
+    for (const item of livePrices.slice(0, 5)) {
+      const parsed = parsePriceFromTitle(item.title);
+      if (parsed.commodity && parsed.price) {
+        const commName = getCommodityName(parsed.commodity, lang);
+        const translatedTitle = lang !== "english" ? (await translateText(item.title, lang) || item.title) : item.title;
+        body += `• *${commName}* — ₹${parsed.price}/${parsed.unit || "quintal"}\n  📝 ${translatedTitle.substring(0, 80)}${translatedTitle.length > 80 ? "..." : ""}\n  📰 ${item.source}\n\n`;
+        count++;
+      }
+    }
+    if (count > 0) {
+      return (headers[lang] ?? headers.english) + body;
+    }
+  }
+
+  // Try 2: Query from DB
+  try {
+    const pool = getRawPool();
+    let sqlQuery: string;
+    let params: any[];
+    if (state) {
+      sqlQuery = `SELECT commodity, variety, mandi_name, price_per_quintal, min_price, max_price, price_trend FROM market_prices WHERE is_active = true AND LOWER(state) = LOWER(?) ORDER BY price_date DESC LIMIT 5`;
+      params = [state];
+    } else {
+      sqlQuery = `SELECT commodity, variety, mandi_name, price_per_quintal, min_price, max_price, price_trend FROM market_prices WHERE is_active = true ORDER BY price_date DESC LIMIT 5`;
+      params = [];
+    }
+    const [result] = await pool.execute(sqlQuery, params);
+    const prices = (result as any[]) || [];
+
+    if (prices.length > 0) {
+      let body = "";
+      for (const p of prices) {
+        const commName = getCommodityName(p.commodity, lang);
+        const variety = p.variety ? ` (${p.variety})` : "";
+        const mandi = p.mandi_name ? ` @ ${p.mandi_name}` : "";
+        const trend = p.price_trend ?? "stable";
+        body += `• *${commName}${variety}*${mandi}\n  ₹${p.price_per_quintal.toLocaleString("en-IN")}/quintal ${trendEmoji(trend)}`;
+        if (p.min_price && p.max_price) {
+          body += ` (Range: ₹${p.min_price}-₹${p.max_price})`;
+        }
+        body += `\n`;
+      }
+      return (headers[lang] ?? headers.english) + body;
+    }
   } catch (e: any) {
     console.error("[MarketPrices] DB error:", e.message);
-    return `💰 *Market Prices*\n📍 ${locLabel}\n\nUnable to fetch prices. Please try again later.`;
   }
+
+  // Fallback: no data
+  const noData: Record<string, string> = {
+    english: `💰 *Market Prices*\n📍 ${locLabel}\n\nNo price data available at the moment.\nPlease try again later.`,
+    hindi: `💰 *बाजार भाव*\n📍 ${locLabel}\n\nफिलहाल मूल्य डेटा उपलब्ध नहीं।\nकृपया बाद में पुनः प्रयास करें।`,
+    telugu: `💰 *మార్కెట్ ధరలు*\n📍 ${locLabel}\n\nప్రస్తుతం ధర డేటా అందుబాటులో లేదు.\nదయచేసి తర్వాత మళ్ళీ ప్రయత్నించండి.`,
+    kannada: `💰 *ಮಾರುಕಟ್ಟೆ ಬೆಲೆಗಳು*\n📍 ${locLabel}\n\nಪ್ರಸ್ತುತ ಬೆಲೆ ಡೇಟಾ ಲಭ್ಯವಿಲ್ಲ.\nದಯವಿಟ್ಟು ನಂತರ ಮತ್ತೆ ಪ್ರಯತ್ನಿಸಿ.`,
+  };
+  return noData[lang] ?? noData.english;
 }
 
 // Fetch government schemes from DB
