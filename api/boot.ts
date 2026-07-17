@@ -1183,52 +1183,85 @@ function detectIntent(message: string): string {
 // ====== DB-DRIVEN RESPONSE FUNCTIONS ======
 
 // Fetch market prices from DB for farmer's state/district
-// Fetch live mandi prices from Krishi Jagat
+// Fetch live mandi prices from Krishi Jagat WordPress API
 async function fetchLiveMandiPrices(state?: string | null): Promise<any[]> {
+  const prices: any[] = [];
+  
+  // Try 1: WordPress REST API for mandi rates (category 11734)
   try {
-    // Try Krishi Jagat mandi page
-    const res = await fetch("https://krishakjagat.org/mandi-bhav/", {
+    const apiRes = await fetch("https://krishakjagat.org/wp-json/wp/v2/posts?categories=11734&per_page=5&_fields=id,title,date,link", {
       headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" },
       signal: AbortSignal.timeout(15000),
     });
-    if (!res.ok) return [];
-    const html = await res.text();
-
-    // Extract price articles from the HTML
-    const prices: any[] = [];
-    // Look for article patterns with commodity and price info
-    const articleRegex = /<article[^>]*>[\s\S]*?<h[23][^>]*>(.*?)<\/h[23]>[\s\S]*?(?:<p[^>]*>(.*?)<\/p>)?[\s\S]*?<\/article>/gi;
-    let match;
-    while ((match = articleRegex.exec(html)) !== null) {
-      const title = stripHtmlTags(match[1]).trim();
-      const content = stripHtmlTags(match[2] || "").trim();
-      if (title && containsPriceInfo(title)) {
-        prices.push({ title, content, source: "Krishi Jagat Mandi" });
+    if (apiRes.ok) {
+      const raw = await apiRes.text();
+      const items = JSON.parse(raw);
+      for (const item of items) {
+        const title = item.title?.rendered || "";
+        const date = item.date || "";
+        const link = item.link || "";
+        if (title) {
+          // Parse commodity from Hindi title like "आज का सोयाबीन मंडी रेट"
+          const commodity = extractCommodityFromHindiTitle(title);
+          prices.push({ 
+            title, 
+            commodity,
+            date, 
+            link, 
+            source: "Krishak Jagat",
+            sourceLang: "hindi"
+          });
+        }
       }
+      if (prices.length > 0) return prices;
     }
+  } catch (e: any) {
+    console.error("[MandiPrices] WP API error:", e.message);
+  }
 
-    // Also try the main RSS for price-related articles
-    if (prices.length === 0) {
-      const rssRes = await fetch("https://krishakjagat.org/feed/", {
-        headers: { "User-Agent": "Mozilla/5.0" },
-        signal: AbortSignal.timeout(10000),
-      });
-      if (rssRes.ok) {
-        const rssXml = await rssRes.text();
-        const items = parseNewsRSS(rssXml, "Krishak Jagat");
-        for (const item of items) {
-          if (containsPriceInfo(item.title)) {
-            prices.push({ title: item.title, content: item.summary, source: "Krishak Jagat" });
-          }
+  // Try 2: RSS feed for price articles
+  try {
+    const rssRes = await fetch("https://krishakjagat.org/feed/", {
+      headers: { "User-Agent": "Mozilla/5.0" },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (rssRes.ok) {
+      const rssXml = await rssRes.text();
+      const items = parseNewsRSS(rssXml, "Krishak Jagat");
+      for (const item of items) {
+        if (containsPriceInfo(item.title)) {
+          prices.push({ 
+            title: item.title, 
+            commodity: extractCommodity(item.title),
+            content: item.summary, 
+            link: item.source_url || item.sourceUrl,
+            source: "Krishak Jagat",
+            sourceLang: "hindi"
+          });
         }
       }
     }
-
-    return prices;
   } catch (e: any) {
-    console.error("[MandiPrices] Fetch error:", e.message);
-    return [];
+    console.error("[MandiPrices] RSS error:", e.message);
   }
+
+  return prices;
+}
+
+// Extract commodity from Hindi title like "आज का सोयाबीन मंडी रेट"
+function extractCommodityFromHindiTitle(title: string): string {
+  const hindiCommodities: Record<string, string> = {
+    "सोयाबीन": "soybean", "मक्का": "corn", "गेहूँ": "wheat", "चावल": "rice",
+    "कपास": "cotton", "गन्ना": "sugarcane", "धान": "paddy", "सरसों": "mustard",
+    "चना": "gram", "मूंग": "moong", "उड़द": "urad", "अरहर": "arhar",
+    "मूंगफली": "groundnut", "प्याज": "onion", "आलू": "potato", "टमाटर": "tomato",
+    "मिर्च": "chilli", "हल्दी": "turmeric", "लहसुन": "garlic", "बाजरा": "bajra",
+    "ज्वार": "jowar", "अदरक": "ginger", "धनिया": "coriander", "जीरा": "cumin",
+  };
+  for (const [hindi, eng] of Object.entries(hindiCommodities)) {
+    if (title.includes(hindi)) return eng;
+  }
+  return extractCommodity(title);
 }
 
 // Check if text contains price information (₹ symbol, price keywords, numbers)
@@ -1332,33 +1365,57 @@ async function formatMarketPrices(lang: string, district?: string | null, state?
     let body = "";
     let count = 0;
     for (const item of livePrices.slice(0, 5)) {
-      const parsed = parsePriceFromTitle(item.title);
-      if (parsed.commodity && parsed.price) {
-        const commName = getCommodityName(parsed.commodity, lang);
-        const translatedTitle = lang !== "english" ? (await translateText(item.title, lang) || item.title) : item.title;
-        body += `• *${commName}* — ₹${parsed.price}/${parsed.unit || "quintal"}\n  📝 ${translatedTitle.substring(0, 80)}${translatedTitle.length > 80 ? "..." : ""}\n  📰 ${item.source}\n\n`;
-        count++;
-      }
+      const commName = getCommodityName(item.commodity || "commodity", lang);
+      const translatedTitle = lang !== "english" ? (await translateText(item.title, lang) || item.title) : item.title;
+      body += `• *${commName}*\n  📝 ${translatedTitle.substring(0, 100)}${translatedTitle.length > 100 ? "..." : ""}\n  📰 ${item.source}\n\n`;
+      count++;
     }
     if (count > 0) {
       return (headers[lang] ?? headers.english) + body;
     }
   }
 
-  // Try 2: Query from DB
+  // Try 2: Query from DB — filter by farmer's state AND district
   try {
     const pool = getRawPool();
-    let sqlQuery: string;
-    let params: any[];
-    if (state) {
-      sqlQuery = `SELECT commodity, variety, mandi_name, price_per_quintal, min_price, max_price, price_trend FROM market_prices WHERE is_active = true AND LOWER(state) = LOWER(?) ORDER BY price_date DESC LIMIT 5`;
-      params = [state];
-    } else {
-      sqlQuery = `SELECT commodity, variety, mandi_name, price_per_quintal, min_price, max_price, price_trend FROM market_prices WHERE is_active = true ORDER BY price_date DESC LIMIT 5`;
-      params = [];
+    let prices: any[] = [];
+    
+    // Query 1: Exact match — farmer's district + state
+    if (district && state) {
+      try {
+        const [result] = await pool.execute(
+          `SELECT commodity, variety, mandi_name, price_per_quintal, min_price, max_price, price_trend, state, district 
+           FROM market_prices WHERE is_active = true AND LOWER(state) = LOWER(?) AND LOWER(district) = LOWER(?) 
+           ORDER BY price_date DESC LIMIT 5`,
+          [state, district]
+        );
+        prices = (result as any[]) || [];
+      } catch { /* ignore */ }
     }
-    const [result] = await pool.execute(sqlQuery, params);
-    const prices = (result as any[]) || [];
+    
+    // Query 2: State-level match (if no district match)
+    if (prices.length === 0 && state) {
+      try {
+        const [result] = await pool.execute(
+          `SELECT commodity, variety, mandi_name, price_per_quintal, min_price, max_price, price_trend, state, district 
+           FROM market_prices WHERE is_active = true AND LOWER(state) = LOWER(?) 
+           ORDER BY price_date DESC LIMIT 5`,
+          [state]
+        );
+        prices = (result as any[]) || [];
+      } catch { /* ignore */ }
+    }
+    
+    // Query 3: All India (last resort)
+    if (prices.length === 0) {
+      try {
+        const [result] = await pool.execute(
+          `SELECT commodity, variety, mandi_name, price_per_quintal, min_price, max_price, price_trend, state, district 
+           FROM market_prices WHERE is_active = true ORDER BY price_date DESC LIMIT 5`
+        );
+        prices = (result as any[]) || [];
+      } catch { /* ignore */ }
+    }
 
     if (prices.length > 0) {
       let body = "";
@@ -1366,8 +1423,9 @@ async function formatMarketPrices(lang: string, district?: string | null, state?
         const commName = getCommodityName(p.commodity, lang);
         const variety = p.variety ? ` (${p.variety})` : "";
         const mandi = p.mandi_name ? ` @ ${p.mandi_name}` : "";
+        const location = p.district ? ` 📍 ${p.district}` : "";
         const trend = p.price_trend ?? "stable";
-        body += `• *${commName}${variety}*${mandi}\n  ₹${p.price_per_quintal.toLocaleString("en-IN")}/quintal ${trendEmoji(trend)}`;
+        body += `• *${commName}${variety}*${mandi}${location}\n  ₹${p.price_per_quintal.toLocaleString("en-IN")}/quintal ${trendEmoji(trend)}`;
         if (p.min_price && p.max_price) {
           body += ` (Range: ₹${p.min_price}-₹${p.max_price})`;
         }
